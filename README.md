@@ -50,6 +50,63 @@ $DATA_ROOT/office31/dslr/<class_name>/*.jpg
 $DATA_ROOT/office31/webcam/<class_name>/*.jpg
 ```
 
+下载后建议立刻做一次结构校验：
+
+```bash
+export DATA_ROOT=/path/to/datasets
+bash scripts/datasets/verify_office31_layout.sh
+```
+
+## 云端完整流程
+
+### 1. 配环境
+
+```bash
+conda create -n coop-da python=3.10 -y
+conda activate coop-da
+
+git clone https://github.com/Guldfisk5682/da_lab.git
+cd da_lab
+
+git clone https://github.com/KaiyangZhou/Dassl.pytorch.git ../Dassl.pytorch
+
+pip install -e ../Dassl.pytorch
+pip install -r requirements.txt
+```
+
+### 2. 下载并校验 Office-31
+
+```bash
+export DATA_ROOT=/path/to/datasets
+bash scripts/datasets/download_office31.sh
+bash scripts/datasets/verify_office31_layout.sh
+```
+
+### 3. 启动训练
+
+```bash
+export DATA=/path/to/datasets
+export SOURCE_DOMAIN=amazon
+export TARGET_DOMAIN=webcam
+export SEED=1
+export STAGE=1
+
+bash scripts/cocoop_da/office31_train.sh
+```
+
+### 4. 启动评测
+
+```bash
+export DATA=/path/to/datasets
+export SOURCE_DOMAIN=amazon
+export TARGET_DOMAIN=webcam
+export SEED=1
+export STAGE=1
+export MODEL_DIR=output/office31/cocoop_da_v0/A2W/seed1/stage1
+
+bash scripts/cocoop_da/office31_eval.sh
+```
+
 ## 训练命令
 
 ### Stage 1
@@ -170,3 +227,12 @@ bash scripts/cocoop_da/office31_eval.sh
 - `STAGE`
 - `SEED`
 - `DATASET_CONFIG`，仅当你需要切到 `office31_flex.yaml`
+
+常用任务映射：
+
+- `amazon -> webcam`: `SOURCE_DOMAIN=amazon`, `TARGET_DOMAIN=webcam`
+- `amazon -> dslr`: `SOURCE_DOMAIN=amazon`, `TARGET_DOMAIN=dslr`
+- `webcam -> amazon`: `SOURCE_DOMAIN=webcam`, `TARGET_DOMAIN=amazon`
+- `webcam -> dslr`: `SOURCE_DOMAIN=webcam`, `TARGET_DOMAIN=dslr`
+- `dslr -> amazon`: `SOURCE_DOMAIN=dslr`, `TARGET_DOMAIN=amazon`
+- `dslr -> webcam`: `SOURCE_DOMAIN=dslr`, `TARGET_DOMAIN=webcam`

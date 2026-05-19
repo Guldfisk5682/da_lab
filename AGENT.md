@@ -63,6 +63,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-05-19: Found and fixed the Office-31 domain parsing issue caused by `argparse.REMAINDER` swallowing `TRAINER.COCOOP_DA.TRAIN.STAGE`; added `--` before config overrides in the train scripts.
 - 2026-05-19: Added an OfficeHome dataset config and a dedicated OfficeHome training script for CoCoOpDAV0.
 - 2026-05-19: Diagnosed that CoOp does not provide an Office-31 downloader or a real dataset-root resolver; added a practical Office-31 download-and-normalize script and made the train/eval scripts fail fast when `DATA` is still a placeholder.
+- 2026-05-19: Added an Office-31 layout verification script and expanded the README with a full cloud workflow covering environment setup, download, verification, training, and evaluation.
 
 ---
 
