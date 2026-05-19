@@ -1,64 +1,147 @@
-# Prompt Learning for Vision-Language Models
+# da_lab
 
-This repo contains the codebase of a series of research projects focused on adapting vision-language models like [CLIP](https://arxiv.org/abs/2103.00020) to downstream datasets via *prompt learning*:
+This repository is a project-specific fork of `CoOp/CoCoOp` for Office-31 domain adaptation with a shallow hidden-state adaptation module (`CoCoOpDAV0`).
 
-* [Conditional Prompt Learning for Vision-Language Models](https://arxiv.org/abs/2203.05557), in CVPR, 2022.
-* [Learning to Prompt for Vision-Language Models](https://arxiv.org/abs/2109.01134), IJCV, 2022.
+## What is already in this repo
 
-## Updates
+- Official `CoOp/CoCoOp` training structure
+- Office-31 dataset wrapper
+- `CoCoOpDAV0` Stage 1 and Stage 2 trainer scaffold
+- Shell entrypoints for dataset extraction, dependency setup, training, and evaluation
 
-- **07.10.2022**: Just added to both [CoOp](https://arxiv.org/abs/2109.01134) and [CoCoOp](https://arxiv.org/abs/2203.05557) (in their appendices) the results on the newly proposed DOSCO (DOmain Shift in COntext) benchmark, which focuses on contextual domain shift and covers a diverse set of classification problems. (The paper about DOSCO is [here](https://arxiv.org/abs/2209.07521) and the code for running CoOp/CoCoOp on DOSCO is [here](https://github.com/KaiyangZhou/on-device-dg).)
+## Environment requirements
 
-- **17.09.2022**: [Call for Papers](https://kaiyangzhou.github.io/assets/cfp_ijcv_lvms.html): IJCV Special Issue on *The Promises and Dangers of Large Vision Models*.
+`pip install -r requirements.txt` is not sufficient by itself.
 
-- **16.07.2022**: CoOp has been accepted to IJCV for publication!
+You also need:
 
-- **10.06.2022**: Our latest work, [Neural Prompt Search](https://arxiv.org/abs/2206.04673), has just been released on arxiv. It provides a novel perspective for fine-tuning large vision models like [ViT](https://arxiv.org/abs/2010.11929), so please check it out if you're interested in parameter-efficient fine-tuning/transfer learning. The code is also made public [here](https://github.com/Davidzhangyuanhan/NOAH).
+1. A fresh Python environment
+2. `torch` and `torchvision` matching the server CUDA version
+3. `Dassl.pytorch` installed into the same environment
 
-- **08.06.2022**: If you're looking for the code to draw the few-shot performance curves (like the ones we show in the CoOp's paper), see `draw_curves.py`.
-
-- **09.04.2022**: The pre-trained weights of CoOp on ImageNet are released [here](#pre-trained-models).
-
-- **11.03.2022**: The code of our CVPR'22 paper, "[Conditional Prompt Learning for Vision-Language Models](https://arxiv.org/abs/2203.05557)," is released.
-
-- **15.10.2021**: We find that the `best_val` model and the `last_step` model achieve similar performance, so we set `TEST.FINAL_MODEL = "last_step"` for all datasets to save training time. Why we used `best_val`: the ([tiny](https://github.com/KaiyangZhou/CoOp/blob/main/datasets/oxford_pets.py#L32)) validation set was designed for the linear probe approach, which requires extensive tuning for its hyperparameters, so we used the `best_val` model for CoOp as well for fair comparison (in this way, both approaches have access to the validation set).
-
-- **09.10.2021**: Important changes are made to Dassl's transforms.py. Please pull the latest commits from https://github.com/KaiyangZhou/Dassl.pytorch and this repo to make sure the code works properly. In particular, 1) `center_crop` now becomes a default transform in testing (applied after resizing the smaller edge to a certain size to keep the image aspect ratio), and 2) for training, `Resize(cfg.INPUT.SIZE)` is deactivated when `random_crop` or `random_resized_crop` is used. Please read this [issue](https://github.com/KaiyangZhou/CoOp/issues/8) on how these changes might affect the performance.
-
-- **18.09.2021**: We have fixed an error in Dassl which could cause a training data loader to have zero length (so no training will be performed) when the dataset size is smaller than the batch size (due to `drop_last=True`). Please pull the latest commit for Dassl (>= `8eecc3c`). This error led to lower results for CoOp in EuroSAT's 1- and 2-shot settings (others are all correct). We will update the paper on arxiv to fix this error.
-
-## How to Install
-This code is built on top of the awesome toolbox [Dassl.pytorch](https://github.com/KaiyangZhou/Dassl.pytorch) so you need to install the `dassl` environment first. Simply follow the instructions described [here](https://github.com/KaiyangZhou/Dassl.pytorch#installation) to install `dassl` as well as PyTorch. After that, run `pip install -r requirements.txt` under `CoOp/` to install a few more packages required by [CLIP](https://github.com/openai/CLIP) (this should be done when `dassl` is activated). Then, you are ready to go.
-
-Follow [DATASETS.md](DATASETS.md) to install the datasets.
-
-## How to Run
-
-Click a paper below to see the detailed instructions on how to run the code to reproduce the results.
-
-* [Learning to Prompt for Vision-Language Models](COOP.md)
-* [Conditional Prompt Learning for Vision-Language Models](COCOOP.md)
-
-## Models and Results
-
-- The pre-trained weights of CoOp (both M=16 & M=4) on ImageNet based on RN50, RN101, ViT-B/16 and ViT-B/32 can be downloaded altogether via this [link](https://drive.google.com/file/d/18ypxfd82RR0pizc5MM1ZWDYDk4j0BtPF/view?usp=sharing). The weights can be used to reproduce the results in Table 1 of CoOp's paper (i.e., the results on ImageNet and its four variants with domain shift). To load the weights and run the evaluation code, you will need to specify `--model-dir` and `--load-epoch` (see this [script](https://github.com/KaiyangZhou/CoOp/blob/main/scripts/eval.sh) for example).
-- The raw numerical results can be found at this [google drive link](https://docs.google.com/spreadsheets/d/12_kaFdD0nct9aUIrDoreY0qDunQ9q9tv/edit?usp=sharing&ouid=100312610418109826457&rtpof=true&sd=true).
-
-## Citation
-If you use this code in your research, please kindly cite the following papers
+## Minimal setup
 
 ```bash
-@inproceedings{zhou2022cocoop,
-    title={Conditional Prompt Learning for Vision-Language Models},
-    author={Zhou, Kaiyang and Yang, Jingkang and Loy, Chen Change and Liu, Ziwei},
-    booktitle={IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
-    year={2022}
-}
+conda create -n coop-da python=3.10 -y
+conda activate coop-da
 
-@article{zhou2022coop,
-    title={Learning to Prompt for Vision-Language Models},
-    author={Zhou, Kaiyang and Yang, Jingkang and Loy, Chen Change and Liu, Ziwei},
-    journal={International Journal of Computer Vision (IJCV)},
-    year={2022}
-}
+# Install torch/torchvision for your CUDA version first.
+# Replace this with the correct command for your server.
+# Example only:
+# pip install torch torchvision --index-url <your-cuda-wheel-index>
+
+git clone https://github.com/Guldfisk5682/da_lab.git
+cd da_lab
+
+bash scripts/setup/install_dassl.sh
 ```
+
+`scripts/setup/install_dassl.sh` will:
+
+- clone `Dassl.pytorch` into `../Dassl.pytorch` if missing
+- run `pip install -e ../Dassl.pytorch`
+- run `pip install -r requirements.txt`
+
+## Dataset preparation
+
+This repo does not auto-download Office-31. Use a manually downloaded archive on the server.
+
+```bash
+export DATA_ROOT=/path/to/datasets
+export OFFICE31_ARCHIVE=/path/to/office31.zip
+
+bash scripts/datasets/download_office31.sh
+```
+
+Expected layout after extraction:
+
+```text
+$DATA_ROOT/office31/amazon/<class_name>/*.jpg
+$DATA_ROOT/office31/dslr/<class_name>/*.jpg
+$DATA_ROOT/office31/webcam/<class_name>/*.jpg
+```
+
+The loader also accepts:
+
+```text
+$DATA_ROOT/office31/amazon/images/<class_name>/*.jpg
+$DATA_ROOT/office31/dslr/images/<class_name>/*.jpg
+$DATA_ROOT/office31/webcam/images/<class_name>/*.jpg
+```
+
+## One-command startup
+
+### Stage 1
+
+Train only the shallow adaptation module and gate:
+
+```bash
+export DATA=/path/to/datasets
+export SOURCE_DOMAIN=amazon
+export TARGET_DOMAIN=webcam
+export SEED=1
+export STAGE=1
+
+bash scripts/cocoop_da/office31_train.sh
+```
+
+### Stage 2
+
+Train shallow adaptation + gate + CoCoOp prompt learner:
+
+```bash
+export DATA=/path/to/datasets
+export SOURCE_DOMAIN=amazon
+export TARGET_DOMAIN=webcam
+export SEED=1
+export STAGE=2
+
+bash scripts/cocoop_da/office31_train.sh
+```
+
+### Evaluation
+
+```bash
+export DATA=/path/to/datasets
+export SOURCE_DOMAIN=amazon
+export TARGET_DOMAIN=webcam
+export SEED=1
+export STAGE=1
+export MODEL_DIR=output/office31/cocoop_da_v0/A2W/seed1/stage1
+
+bash scripts/cocoop_da/office31_eval.sh
+```
+
+## Hyperparameters
+
+### `N_CTX`
+
+- Global fallback default in code: `16`
+- Current `CoCoOpDAV0` training config: `4`
+
+That means:
+
+- if you use `configs/trainers/CoCoOpDA/vit_b16_v0.yaml`, then `N_CTX=4`
+- if you omit the config override and rely only on `train.py` defaults, then `N_CTX=16`
+
+Current project default for actual runs should be treated as `4`, because the provided entry script points to:
+
+```text
+configs/trainers/CoCoOpDA/vit_b16_v0.yaml
+```
+
+## Important notes
+
+- CLIP weights are still downloaded lazily at runtime by the original CoCoOp loader.
+- `Dassl.pytorch` must be importable in the same environment, otherwise `train.py` will fail before startup.
+- `requirements.txt` intentionally does not pin `torch`, because that must match the target server CUDA stack.
+
+## Key files
+
+- `docs/env_setup.md`
+- `docs/codebase_notes.md`
+- `docs/office31_setup.md`
+- `datasets/office31.py`
+- `trainers/cocoop_da_v0.py`
+- `models/shallow_adapt.py`
+- `configs/trainers/CoCoOpDA/vit_b16_v0.yaml`
