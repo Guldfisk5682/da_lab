@@ -1,79 +1,34 @@
 # da_lab
 
-This repository is a project-specific fork of `CoOp/CoCoOp` for Office-31 domain adaptation with a shallow hidden-state adaptation module (`CoCoOpDAV0`).
-
-## What is already in this repo
-
-- Official `CoOp/CoCoOp` training structure
-- Office-31 dataset wrapper
-- `CoCoOpDAV0` Stage 1 and Stage 2 trainer scaffold
-- Shell entrypoints for dataset extraction, dependency setup, training, and evaluation
-
-## Environment requirements
-
-`pip install -r requirements.txt` is not sufficient by itself.
-
-You also need:
-
-1. A fresh Python environment
-2. `torch` and `torchvision` matching the server CUDA version
-3. `Dassl.pytorch` installed into the same environment
-
-## Minimal setup
+## 环境配置命令
 
 ```bash
 conda create -n coop-da python=3.10 -y
 conda activate coop-da
 
-# Install torch/torchvision for your CUDA version first.
-# Replace this with the correct command for your server.
-# Example only:
-# pip install torch torchvision --index-url <your-cuda-wheel-index>
-
 git clone https://github.com/Guldfisk5682/da_lab.git
 cd da_lab
 
-bash scripts/setup/install_dassl.sh
+git clone https://github.com/KaiyangZhou/Dassl.pytorch.git ../Dassl.pytorch
+
+pip install -e ../Dassl.pytorch
+pip install -r requirements.txt
 ```
 
-`scripts/setup/install_dassl.sh` will:
+说明：
 
-- clone `Dassl.pytorch` into `../Dassl.pytorch` if missing
-- run `pip install -e ../Dassl.pytorch`
-- run `pip install -r requirements.txt`
+- `requirements.txt` 已包含：
+  - `torch==2.6.0+cu124`
+  - `torchvision==0.21.0+cu124`
+  - `--extra-index-url https://download.pytorch.org/whl/cu124`
+- 因此远端服务器按上面顺序执行即可。
+- `Dassl.pytorch` 不是 `requirements.txt` 里的普通 pip 包，必须单独 clone 并 `pip install -e`。
 
-## Dataset preparation
-
-This repo does not auto-download Office-31. Use a manually downloaded archive on the server.
-
-```bash
-export DATA_ROOT=/path/to/datasets
-export OFFICE31_ARCHIVE=/path/to/office31.zip
-
-bash scripts/datasets/download_office31.sh
-```
-
-Expected layout after extraction:
-
-```text
-$DATA_ROOT/office31/amazon/<class_name>/*.jpg
-$DATA_ROOT/office31/dslr/<class_name>/*.jpg
-$DATA_ROOT/office31/webcam/<class_name>/*.jpg
-```
-
-The loader also accepts:
-
-```text
-$DATA_ROOT/office31/amazon/images/<class_name>/*.jpg
-$DATA_ROOT/office31/dslr/images/<class_name>/*.jpg
-$DATA_ROOT/office31/webcam/images/<class_name>/*.jpg
-```
-
-## One-command startup
+## 训练命令
 
 ### Stage 1
 
-Train only the shallow adaptation module and gate:
+只训练浅层适配模块和 gate：
 
 ```bash
 export DATA=/path/to/datasets
@@ -87,7 +42,7 @@ bash scripts/cocoop_da/office31_train.sh
 
 ### Stage 2
 
-Train shallow adaptation + gate + CoCoOp prompt learner:
+训练浅层适配模块、gate、CoCoOp prompt learner：
 
 ```bash
 export DATA=/path/to/datasets
@@ -99,7 +54,49 @@ export STAGE=2
 bash scripts/cocoop_da/office31_train.sh
 ```
 
-### Evaluation
+### 可用超参数
+
+脚本直接使用的环境变量：
+
+- `DATA`: 数据集根目录，例如 `/data/datasets`
+- `SOURCE_DOMAIN`: 源域，可选 `amazon` / `dslr` / `webcam`
+- `TARGET_DOMAIN`: 目标域，可选 `amazon` / `dslr` / `webcam`
+- `SEED`: 随机种子
+- `STAGE`: `1` 或 `2`
+- `OUTPUT_DIR`: 可选，自定义输出目录
+
+如果要覆盖配置文件中的训练超参数，可以直接这样传：
+
+```bash
+python train.py \
+  --root "${DATA}" \
+  --seed "${SEED}" \
+  --trainer CoCoOpDAV0 \
+  --dataset-config-file configs/datasets/office31.yaml \
+  --config-file configs/trainers/CoCoOpDA/vit_b16_v0.yaml \
+  --source-domains "${SOURCE_DOMAIN}" \
+  --target-domains "${TARGET_DOMAIN}" \
+  TRAINER.COCOOP.N_CTX 4 \
+  OPTIM.LR 0.002 \
+  OPTIM.MAX_EPOCH 10
+```
+
+当前主配置文件：
+
+```text
+configs/trainers/CoCoOpDA/vit_b16_v0.yaml
+```
+
+当前关键默认值：
+
+- `TRAINER.COCOOP.N_CTX = 4`
+- `TRAINER.COCOOP.CTX_INIT = "a photo of a"`
+- `OPTIM.LR = 0.002`
+- `OPTIM.MAX_EPOCH = 10`
+- `TRAINER.COCOOP_DA.INJECT_LAYER = 3`
+- `TRAINER.COCOOP_DA.ADAPT_MODE = "s2t"`
+
+## 评测命令
 
 ```bash
 export DATA=/path/to/datasets
@@ -112,36 +109,19 @@ export MODEL_DIR=output/office31/cocoop_da_v0/A2W/seed1/stage1
 bash scripts/cocoop_da/office31_eval.sh
 ```
 
-## Hyperparameters
+### 评测可用超参数
 
-### `N_CTX`
+- `DATA`: 数据集根目录
+- `SOURCE_DOMAIN`: 源域
+- `TARGET_DOMAIN`: 目标域
+- `SEED`: 随机种子
+- `STAGE`: `1` 或 `2`
+- `MODEL_DIR`: 待评测 checkpoint 目录
+- `LOAD_EPOCH`: 可选，指定加载某个 epoch；不填则默认读 best/last 逻辑
 
-- Global fallback default in code: `16`
-- Current `CoCoOpDAV0` training config: `4`
+如果你要直接跑六个 Office-31 任务，只需要替换：
 
-That means:
-
-- if you use `configs/trainers/CoCoOpDA/vit_b16_v0.yaml`, then `N_CTX=4`
-- if you omit the config override and rely only on `train.py` defaults, then `N_CTX=16`
-
-Current project default for actual runs should be treated as `4`, because the provided entry script points to:
-
-```text
-configs/trainers/CoCoOpDA/vit_b16_v0.yaml
-```
-
-## Important notes
-
-- CLIP weights are still downloaded lazily at runtime by the original CoCoOp loader.
-- `Dassl.pytorch` must be importable in the same environment, otherwise `train.py` will fail before startup.
-- `requirements.txt` intentionally does not pin `torch`, because that must match the target server CUDA stack.
-
-## Key files
-
-- `docs/env_setup.md`
-- `docs/codebase_notes.md`
-- `docs/office31_setup.md`
-- `datasets/office31.py`
-- `trainers/cocoop_da_v0.py`
-- `models/shallow_adapt.py`
-- `configs/trainers/CoCoOpDA/vit_b16_v0.yaml`
+- `SOURCE_DOMAIN`
+- `TARGET_DOMAIN`
+- `STAGE`
+- `SEED`
