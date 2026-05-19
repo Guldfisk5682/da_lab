@@ -17,6 +17,7 @@ import datasets.sun397
 import datasets.caltech101
 import datasets.ucf101
 import datasets.imagenet
+import datasets.office31
 
 import datasets.imagenet_sketch
 import datasets.imagenetv2
@@ -25,6 +26,7 @@ import datasets.imagenet_r
 
 import trainers.coop
 import trainers.cocoop
+import trainers.cocoop_da_v0
 import trainers.zsclip
 
 
@@ -98,6 +100,37 @@ def extend_cfg(cfg):
     cfg.TRAINER.COCOOP.N_CTX = 16  # number of context vectors
     cfg.TRAINER.COCOOP.CTX_INIT = ""  # initialization words
     cfg.TRAINER.COCOOP.PREC = "fp16"  # fp16, fp32, amp
+
+    cfg.TRAINER.COCOOP_DA = CN()
+    cfg.TRAINER.COCOOP_DA.INJECT_LAYER = 3
+    cfg.TRAINER.COCOOP_DA.MODIFY_CLS = False
+    cfg.TRAINER.COCOOP_DA.ADAPT_MODE = "s2t"
+
+    cfg.TRAINER.COCOOP_DA.STATS = CN()
+    cfg.TRAINER.COCOOP_DA.STATS.TYPE = "ema"
+    cfg.TRAINER.COCOOP_DA.STATS.MOMENTUM = 0.99
+    cfg.TRAINER.COCOOP_DA.STATS.EPS = 1e-6
+
+    cfg.TRAINER.COCOOP_DA.GATE = CN()
+    cfg.TRAINER.COCOOP_DA.GATE.TYPE = "token_channel"
+    cfg.TRAINER.COCOOP_DA.GATE.INIT_BIAS = -2.0
+
+    cfg.TRAINER.COCOOP_DA.LOSS = CN()
+    cfg.TRAINER.COCOOP_DA.LOSS.LAMBDA_CONS = 0.1
+    cfg.TRAINER.COCOOP_DA.LOSS.LAMBDA_ENT = 0.01
+
+    cfg.TRAINER.COCOOP_DA.TRAIN = CN()
+    cfg.TRAINER.COCOOP_DA.TRAIN.STAGE = 1
+    cfg.TRAINER.COCOOP_DA.TRAIN.FREEZE_VISUAL = True
+    cfg.TRAINER.COCOOP_DA.TRAIN.FREEZE_TEXT = True
+    cfg.TRAINER.COCOOP_DA.TRAIN.TRAIN_PROMPT_LEARNER = False
+    cfg.TRAINER.COCOOP_DA.TRAIN.PROMPT_LR_MULT = 0.2
+
+    cfg.TRAINER.COCOOP_DA.EVAL = CN()
+    cfg.TRAINER.COCOOP_DA.EVAL.USE_ADAPTED_TARGET = True
+
+    cfg.TRAINER.COCOOP_DA.DEBUG = CN()
+    cfg.TRAINER.COCOOP_DA.DEBUG.PRINT_ONCE = False
 
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
 
