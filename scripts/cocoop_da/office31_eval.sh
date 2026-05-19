@@ -15,6 +15,21 @@ STAGE="${STAGE:-1}"
 MODEL_DIR="${MODEL_DIR:-output/office31/cocoop_da_v0/A2W/seed1/stage1}"
 LOAD_EPOCH="${LOAD_EPOCH:-}"
 
+if [ "${DATA}" = "/path/to/datasets" ]; then
+  echo "Please set DATA to a real dataset root before evaluation." >&2
+  exit 1
+fi
+
+if [ ! -d "${DATA}" ]; then
+  echo "Dataset root does not exist: ${DATA}" >&2
+  exit 2
+fi
+
+if [ ! -d "${MODEL_DIR}" ]; then
+  echo "Model directory does not exist: ${MODEL_DIR}" >&2
+  exit 3
+fi
+
 CMD=(
   python train.py
   --root "${DATA}"

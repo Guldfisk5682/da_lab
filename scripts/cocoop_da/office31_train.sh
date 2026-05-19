@@ -13,6 +13,16 @@ TARGET_DOMAIN="${TARGET_DOMAIN:-webcam}"
 SEED="${SEED:-1}"
 STAGE="${STAGE:-1}"
 
+if [ "${DATA}" = "/path/to/datasets" ]; then
+  echo "Please set DATA to a real dataset root before training." >&2
+  exit 1
+fi
+
+if [ ! -d "${DATA}" ]; then
+  echo "Dataset root does not exist: ${DATA}" >&2
+  exit 2
+fi
+
 PROMPT_TRAIN="false"
 if [ "${STAGE}" = "2" ]; then
   PROMPT_TRAIN="true"

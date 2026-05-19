@@ -24,6 +24,32 @@ pip install -r requirements.txt
 - 因此远端服务器按上面顺序执行即可。
 - `Dassl.pytorch` 不是 `requirements.txt` 里的普通 pip 包，必须单独 clone 并 `pip install -e`。
 
+## Office-31 数据准备命令
+
+直接下载并整理到标准目录：
+
+```bash
+export DATA_ROOT=/path/to/datasets
+bash scripts/datasets/download_office31.sh
+```
+
+如果你已经手里有压缩包，也可以直接指定：
+
+```bash
+export DATA_ROOT=/path/to/datasets
+export OFFICE31_ARCHIVE=/path/to/domain_adaptation_images.tar.gz
+
+bash scripts/datasets/download_office31.sh
+```
+
+脚本完成后，应当得到：
+
+```text
+$DATA_ROOT/office31/amazon/<class_name>/*.jpg
+$DATA_ROOT/office31/dslr/<class_name>/*.jpg
+$DATA_ROOT/office31/webcam/<class_name>/*.jpg
+```
+
 ## 训练命令
 
 ### Stage 1
