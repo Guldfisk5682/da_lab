@@ -5,8 +5,8 @@ from dassl.utils import listdir_nohidden
 
 
 @DATASET_REGISTRY.register()
-class Office31(DatasetBase):
-    """Office-31 with source/target domain splits for DA."""
+class Office31Flex(DatasetBase):
+    """Office-31 with flexible directory layout support for DA."""
 
     dataset_dir = "office31"
     domains = ["amazon", "dslr", "webcam"]

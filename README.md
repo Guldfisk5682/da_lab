@@ -87,6 +87,24 @@ python train.py \
 configs/trainers/CoCoOpDA/vit_b16_v0.yaml
 ```
 
+默认数据集配置：
+
+```text
+configs/datasets/office31.yaml
+```
+
+如果你的 Office-31 目录是下面这种结构：
+
+```text
+$DATA/office31/amazon/images/<class_name>/*.jpg
+```
+
+则把数据集配置切换为：
+
+```text
+configs/datasets/office31_flex.yaml
+```
+
 当前关键默认值：
 
 - `TRAINER.COCOOP.N_CTX = 4`
@@ -125,3 +143,4 @@ bash scripts/cocoop_da/office31_eval.sh
 - `TARGET_DOMAIN`
 - `STAGE`
 - `SEED`
+- `DATASET_CONFIG`，仅当你需要切到 `office31_flex.yaml`
