@@ -58,6 +58,13 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 
 ---
 
+## Work Log
+
+- 2026-05-19: Found and fixed the Office-31 domain parsing issue caused by `argparse.REMAINDER` swallowing `TRAINER.COCOOP_DA.TRAIN.STAGE`; added `--` before config overrides in the train scripts.
+- 2026-05-19: Added an OfficeHome dataset config and a dedicated OfficeHome training script for CoCoOpDAV0.
+
+---
+
 ## Phase 0: Repository Initialization
 
 ### Expected commands

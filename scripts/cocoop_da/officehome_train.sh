@@ -6,10 +6,10 @@ cd "$(dirname "$0")/../.."
 
 DATA="${DATA:-/path/to/datasets}"
 TRAINER="${TRAINER:-CoCoOpDAV0}"
-DATASET_CONFIG="${DATASET_CONFIG:-configs/datasets/office31.yaml}"
+DATASET_CONFIG="${DATASET_CONFIG:-configs/datasets/office_home.yaml}"
 CFG="${CFG:-configs/trainers/CoCoOpDA/vit_b16_v0.yaml}"
-SOURCE_DOMAIN="${SOURCE_DOMAIN:-amazon}"
-TARGET_DOMAIN="${TARGET_DOMAIN:-webcam}"
+SOURCE_DOMAIN="${SOURCE_DOMAIN:-art}"
+TARGET_DOMAIN="${TARGET_DOMAIN:-clipart}"
 SEED="${SEED:-1}"
 STAGE="${STAGE:-1}"
 
@@ -19,7 +19,7 @@ if [ "${STAGE}" = "2" ]; then
 fi
 
 TASK_TAG="$(echo "${SOURCE_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')2$(echo "${TARGET_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')"
-OUTPUT_DIR="${OUTPUT_DIR:-output/office31/cocoop_da_v0/${TASK_TAG}/seed${SEED}/stage${STAGE}}"
+OUTPUT_DIR="${OUTPUT_DIR:-output/office_home/cocoop_da_v0/${TASK_TAG}/seed${SEED}/stage${STAGE}}"
 
 python train.py \
   --root "${DATA}" \
