@@ -55,12 +55,15 @@ CMD=(
   --target-domains "${TARGET_DOMAIN}"
   --eval-only
   --model-dir "${MODEL_DIR}"
-  --
-  TRAINER.COCOOP_DA.TRAIN.STAGE "${STAGE}"
 )
 
 if [ -n "${LOAD_EPOCH}" ]; then
   CMD+=(--load-epoch "${LOAD_EPOCH}")
 fi
+
+CMD+=(
+  --
+  TRAINER.COCOOP_DA.TRAIN.STAGE "${STAGE}"
+)
 
 "${CMD[@]}"
