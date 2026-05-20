@@ -202,7 +202,7 @@ class CustomCLIPGSPALegacy(nn.Module):
         return torch.stack(logits)
 
     def _encode_image_normal(self, image):
-        hidden = self.visual_adapter.patch_embed(image)
+        hidden = self.visual_adapter.forward_until(image, self.inject_after_block)
         _, vision_feats = self._forward_visual_tail(hidden)
         return vision_feats
 
@@ -431,20 +431,26 @@ class GSPALegacy(TrainerXU):
 
         return param_groups
 
+    def _model_ref(self):
+        if isinstance(self.model, nn.DataParallel):
+            return self.model.module
+        return self.model
+
     def forward_backward(self, batch_x, batch_u):
         image_x, label_x, image_u = self.parse_batch_train(batch_x, batch_u)
         prec = self.cfg.TRAINER.GSPA_LEGACY.PREC
+        model = self._model_ref()
 
         if prec == "amp":
             with autocast():
-                outputs = self.model.forward_train(image_x, label_x, image_u)
+                outputs = model.forward_train(image_x, label_x, image_u)
                 loss = outputs["loss"]
             self.optim.zero_grad()
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optim)
             self.scaler.update()
         else:
-            outputs = self.model.forward_train(image_x, label_x, image_u)
+            outputs = model.forward_train(image_x, label_x, image_u)
             loss = outputs["loss"]
             self.optim.zero_grad()
             loss.backward()
@@ -462,7 +468,8 @@ class GSPALegacy(TrainerXU):
         return loss_summary
 
     def model_inference(self, input):
-        return self.model.forward_inference(input)
+        model = self._model_ref()
+        return model.forward_inference(input)
 
     def load_model(self, directory, epoch=None):
         if not directory:

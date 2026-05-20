@@ -95,6 +95,8 @@ Main module: shallow hidden-state normalize-restore + learnable gate
   4. Confirm the first-batch `gate_mean` is close to `sigmoid(3.0)`, i.e. around `0.95`.
   5. Use `scripts/gspa_legacy/office31_eval.sh` to confirm eval-only works without a target batch.
   6. Only after the single-task sanity check passes, expand to `scripts/gspa_legacy/office31_train_all.sh`.
+- 2026-05-20: Fixed `GSPALegacy` DataParallel training by routing `forward_train`/`forward_inference` through the underlying module when multiple GPUs are used.
+- 2026-05-20: Fixed `GSPALegacy` inference to run the full visual stack before the tail; previously `_encode_image_normal` skipped blocks 1..INJECT_AFTER_BLOCK, causing near-random accuracy.
 
 ---
 
