@@ -139,7 +139,7 @@ bash scripts/cocoop_da/office31_train.sh
 
 ### 一键跑完 Office-31 六个任务
 
-该脚本会依次训练并在每个任务末尾自动评测（训练脚本内置评测逻辑），无需额外执行 `office31_eval.sh`。
+该脚本会依次训练六个任务，并在每个任务训练结束后自动调用 `office31_eval.sh` 做评测。
 
 ```bash
 export DATA=/path/to/datasets
@@ -160,6 +160,7 @@ bash scripts/cocoop_da/office31_train_all.sh
 - `STAGE`: `1` 或 `2`
 - `OUTPUT_DIR`: 可选，自定义输出目录
 - `TRAINER`: 训练器名称（默认 `CoCoOpDAV0`）
+- `TRAINER_DIR`: 可选，输出目录标签；默认跟随 `TRAINER`
 - `CFG`: 训练配置文件（默认 `configs/trainers/CoCoOpDA/vit_b16_v0.yaml`）
 - `DATASET_CONFIG`: 数据集配置（默认 `configs/datasets/office31.yaml`）
 
@@ -220,7 +221,7 @@ export SOURCE_DOMAIN=amazon
 export TARGET_DOMAIN=webcam
 export SEED=1
 export STAGE=1
-export MODEL_DIR=output/office31/cocoop_da_v0/A2W/seed1/stage1
+export MODEL_DIR=output/office31/CoCoOpDAV0/A2W/seed1/stage1
 
 bash scripts/cocoop_da/office31_eval.sh
 ```
@@ -234,6 +235,7 @@ bash scripts/cocoop_da/office31_eval.sh
 - `STAGE`: `1` 或 `2`
 - `MODEL_DIR`: 待评测 checkpoint 目录
 - `LOAD_EPOCH`: 可选，指定加载某个 epoch；不填则默认读 best/last 逻辑
+- `TRAINER_DIR`: 可选，若不手动设置 `MODEL_DIR`，则用于拼默认 checkpoint 路径
 
 如果你要直接跑六个 Office-31 任务，只需要替换：
 

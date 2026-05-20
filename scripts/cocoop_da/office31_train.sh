@@ -12,6 +12,7 @@ SOURCE_DOMAIN="${SOURCE_DOMAIN:-amazon}"
 TARGET_DOMAIN="${TARGET_DOMAIN:-webcam}"
 SEED="${SEED:-1}"
 STAGE="${STAGE:-1}"
+TRAINER_DIR="${TRAINER_DIR:-${TRAINER}}"
 
 if [ "${DATA}" = "/path/to/datasets" ]; then
   echo "Please set DATA to a real dataset root before training." >&2
@@ -29,7 +30,7 @@ if [ "${STAGE}" = "2" ]; then
 fi
 
 TASK_TAG="$(echo "${SOURCE_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')2$(echo "${TARGET_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')"
-OUTPUT_DIR="${OUTPUT_DIR:-output/office31/cocoop_da_v0/${TASK_TAG}/seed${SEED}/stage${STAGE}}"
+OUTPUT_DIR="${OUTPUT_DIR:-output/office31/${TRAINER_DIR}/${TASK_TAG}/seed${SEED}/stage${STAGE}}"
 
 python train.py \
   --root "${DATA}" \

@@ -10,6 +10,7 @@ DATASET_CONFIG="${DATASET_CONFIG:-configs/datasets/office31.yaml}"
 CFG="${CFG:-configs/trainers/CoCoOpDA/vit_b16_v0.yaml}"
 SEED="${SEED:-1}"
 STAGE="${STAGE:-1}"
+TRAINER_DIR="${TRAINER_DIR:-${TRAINER}}"
 
 if [ "${DATA}" = "/path/to/datasets" ]; then
   echo "Please set DATA to a real dataset root before training." >&2
@@ -42,6 +43,7 @@ for task in "${TASKS[@]}"; do
 
   DATA="${DATA}" \
   TRAINER="${TRAINER}" \
+  TRAINER_DIR="${TRAINER_DIR}" \
   DATASET_CONFIG="${DATASET_CONFIG}" \
   CFG="${CFG}" \
   SOURCE_DOMAIN="${SOURCE_DOMAIN}" \
@@ -49,5 +51,18 @@ for task in "${TASKS[@]}"; do
   SEED="${SEED}" \
   STAGE="${STAGE}" \
     bash scripts/cocoop_da/office31_train.sh
+
+  echo "Evaluating Office-31: ${SOURCE_DOMAIN} -> ${TARGET_DOMAIN}"
+
+  DATA="${DATA}" \
+  TRAINER="${TRAINER}" \
+  TRAINER_DIR="${TRAINER_DIR}" \
+  DATASET_CONFIG="${DATASET_CONFIG}" \
+  CFG="${CFG}" \
+  SOURCE_DOMAIN="${SOURCE_DOMAIN}" \
+  TARGET_DOMAIN="${TARGET_DOMAIN}" \
+  SEED="${SEED}" \
+  STAGE="${STAGE}" \
+    bash scripts/cocoop_da/office31_eval.sh
 
 done

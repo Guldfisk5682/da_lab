@@ -12,6 +12,7 @@ SOURCE_DOMAIN="${SOURCE_DOMAIN:-art}"
 TARGET_DOMAIN="${TARGET_DOMAIN:-clipart}"
 SEED="${SEED:-1}"
 STAGE="${STAGE:-1}"
+TRAINER_DIR="${TRAINER_DIR:-${TRAINER}}"
 
 PROMPT_TRAIN="false"
 if [ "${STAGE}" = "2" ]; then
@@ -19,7 +20,7 @@ if [ "${STAGE}" = "2" ]; then
 fi
 
 TASK_TAG="$(echo "${SOURCE_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')2$(echo "${TARGET_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')"
-OUTPUT_DIR="${OUTPUT_DIR:-output/office_home/cocoop_da_v0/${TASK_TAG}/seed${SEED}/stage${STAGE}}"
+OUTPUT_DIR="${OUTPUT_DIR:-output/office_home/${TRAINER_DIR}/${TASK_TAG}/seed${SEED}/stage${STAGE}}"
 
 python train.py \
   --root "${DATA}" \

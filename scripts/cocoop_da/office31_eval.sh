@@ -12,7 +12,9 @@ SOURCE_DOMAIN="${SOURCE_DOMAIN:-amazon}"
 TARGET_DOMAIN="${TARGET_DOMAIN:-webcam}"
 SEED="${SEED:-1}"
 STAGE="${STAGE:-1}"
-MODEL_DIR="${MODEL_DIR:-output/office31/cocoop_da_v0/A2W/seed1/stage1}"
+TRAINER_DIR="${TRAINER_DIR:-${TRAINER}}"
+TASK_TAG="$(echo "${SOURCE_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')2$(echo "${TARGET_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')"
+MODEL_DIR="${MODEL_DIR:-output/office31/${TRAINER_DIR}/${TASK_TAG}/seed${SEED}/stage${STAGE}}"
 LOAD_EPOCH="${LOAD_EPOCH:-}"
 
 if [ "${DATA}" = "/path/to/datasets" ]; then
@@ -41,6 +43,7 @@ CMD=(
   --target-domains "${TARGET_DOMAIN}"
   --eval-only
   --model-dir "${MODEL_DIR}"
+  --
   TRAINER.COCOOP_DA.TRAIN.STAGE "${STAGE}"
 )
 
