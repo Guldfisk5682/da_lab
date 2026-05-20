@@ -95,6 +95,14 @@ Main module: shallow hidden-state normalize-restore + learnable gate
   4. Confirm the first-batch `gate_mean` is close to `sigmoid(3.0)`, i.e. around `0.95`.
   5. Use `scripts/gspa_legacy/office31_eval.sh` to confirm eval-only works without a target batch.
   6. Only after the single-task sanity check passes, expand to `scripts/gspa_legacy/office31_train_all.sh`.
+- 2026-05-20: Added the first ablation-study layer for `GSPALegacy`. Trainer-side naming is now standardized under `TRAINER.GSPA_LEGACY.ABLATION.*`, with support for `GATE_MODE`, `FIXED_GATE_VALUE`, `TRAIN_VISION_LAST3`, `STYLE_MODE`, and `STATS_SCOPE`.
+- 2026-05-20: Implemented `scripts/gspa_legacy_ablation/make_ablation_configs.py`, `run_one.sh`, `run_office31_ablation.sh`, and `collect_results.py`. Current scope is intentionally limited to `L0_full`, `L1_fixed_gate`, and `L2_normal_only`.
+- 2026-05-20: Local ablation smoke validation used a tiny synthetic `Office31Flex` dataset and a local random ViT-B/16 checkpoint only to verify script/dataflow correctness. Verified that:
+  1. `python scripts/gspa_legacy_ablation/make_ablation_configs.py` generates the three config files.
+  2. `bash scripts/gspa_legacy_ablation/run_one.sh L0 A W 1` trains and evaluates into `output/office31_ablation/L0_full/A2W/seed1`.
+  3. The log contains experiment metadata, ablation fields, parameter groups, `loss_ce`, and gate statistics.
+  4. The first-batch `gate_mean` is about `0.9468`, consistent with `sigmoid(3.0)`.
+  5. `python scripts/gspa_legacy_ablation/collect_results.py` successfully parses the A2W result and writes `results/office31_ablation_seed1.csv` and `.md`.
 - 2026-05-20: Fixed `GSPALegacy` DataParallel training by routing `forward_train`/`forward_inference` through the underlying module when multiple GPUs are used.
 - 2026-05-20: Fixed `GSPALegacy` inference to run the full visual stack before the tail; previously `_encode_image_normal` skipped blocks 1..INJECT_AFTER_BLOCK, causing near-random accuracy.
 

@@ -137,11 +137,19 @@ class CustomCLIPGSPALegacy(nn.Module):
         self.visual_projection = clip_model.visual.proj
 
         gspa_cfg = cfg.TRAINER.GSPA_LEGACY
+        ablation_cfg = gspa_cfg.ABLATION
         vision_dim = self.visual.ln_post.weight.shape[0]
         self.inject_after_block = gspa_cfg.INJECT_AFTER_BLOCK
         self.eps = gspa_cfg.EPS
         self.label_smoothing = gspa_cfg.LABEL_SMOOTHING
         self.debug_print_once = gspa_cfg.DEBUG.PRINT_ONCE
+        self.exp_name = ablation_cfg.EXP_NAME
+        self.gate_mode = ablation_cfg.GATE_MODE
+        self.fixed_gate_value = float(ablation_cfg.FIXED_GATE_VALUE)
+        self.train_vision_last3 = bool(ablation_cfg.TRAIN_VISION_LAST3)
+        self.style_mode = ablation_cfg.STYLE_MODE
+        self.stats_scope = ablation_cfg.STATS_SCOPE
+        self.gate_init_bias = float(gspa_cfg.GATE_INIT_BIAS)
         self._has_printed_debug = False
 
         self.gate = LegacyFeatureGate(
@@ -153,17 +161,45 @@ class CustomCLIPGSPALegacy(nn.Module):
 
     def _compute_stats(self, hidden_states):
         hidden_float = hidden_states.float()
-        mu = hidden_float.mean(dim=1, keepdim=True)
-        std = hidden_float.std(dim=1, keepdim=True) + self.eps
-        hidden_norm = (hidden_float - mu) / std
+        if self.stats_scope == "all_tokens":
+            mu = hidden_float.mean(dim=1, keepdim=True)
+            std = hidden_float.std(dim=1, keepdim=True) + self.eps
+            hidden_norm = (hidden_float - mu) / std
+            return mu, std, hidden_norm
+
+        cls_token = hidden_float[:, :1, :]
+        patch_tokens = hidden_float[:, 1:, :]
+        mu = patch_tokens.mean(dim=1, keepdim=True)
+        std = patch_tokens.std(dim=1, keepdim=True) + self.eps
+        patch_norm = (patch_tokens - mu) / std
+        hidden_norm = torch.cat([cls_token, patch_norm], dim=1)
         return mu, std, hidden_norm
 
     def _cross_style_swap(self, hidden_s, hidden_t):
         mu_s, std_s, h_s_norm = self._compute_stats(hidden_s)
         mu_t, std_t, h_t_norm = self._compute_stats(hidden_t)
 
-        h_s_adapted = (h_s_norm * std_t + mu_t).to(hidden_s.dtype)
-        h_t_adapted = (h_t_norm * std_s + mu_s).to(hidden_t.dtype)
+        if self.style_mode == "none":
+            h_s_adapted = hidden_s
+            h_t_adapted = hidden_t
+        elif self.stats_scope == "all_tokens":
+            if self.style_mode == "identity":
+                h_s_adapted = (h_s_norm * std_s + mu_s).to(hidden_s.dtype)
+                h_t_adapted = (h_t_norm * std_t + mu_t).to(hidden_t.dtype)
+            else:
+                h_s_adapted = (h_s_norm * std_t + mu_t).to(hidden_s.dtype)
+                h_t_adapted = (h_t_norm * std_s + mu_s).to(hidden_t.dtype)
+        else:
+            h_s_adapted = hidden_s.float().clone()
+            h_t_adapted = hidden_t.float().clone()
+            if self.style_mode == "identity":
+                h_s_adapted[:, 1:, :] = h_s_norm[:, 1:, :] * std_s + mu_s
+                h_t_adapted[:, 1:, :] = h_t_norm[:, 1:, :] * std_t + mu_t
+            else:
+                h_s_adapted[:, 1:, :] = h_s_norm[:, 1:, :] * std_t + mu_t
+                h_t_adapted[:, 1:, :] = h_t_norm[:, 1:, :] * std_s + mu_s
+            h_s_adapted = h_s_adapted.to(hidden_s.dtype)
+            h_t_adapted = h_t_adapted.to(hidden_t.dtype)
 
         return {
             "mu_s": mu_s,
@@ -206,6 +242,42 @@ class CustomCLIPGSPALegacy(nn.Module):
         _, vision_feats = self._forward_visual_tail(hidden)
         return vision_feats
 
+    def _compute_gate(self, last_hidden_s_normal, last_hidden_s_adapted):
+        if self.gate_mode == "normal_only" or self.style_mode == "none":
+            gate_s = torch.ones(
+                (last_hidden_s_normal.shape[0], 1),
+                device=last_hidden_s_normal.device,
+                dtype=last_hidden_s_normal.dtype,
+            )
+            fused_s = last_hidden_s_normal
+            return gate_s, fused_s
+
+        if self.gate_mode == "fixed":
+            gate_s = torch.full(
+                (last_hidden_s_normal.shape[0], 1),
+                self.fixed_gate_value,
+                device=last_hidden_s_normal.device,
+                dtype=last_hidden_s_normal.dtype,
+            )
+        else:
+            gate_s = self.gate(last_hidden_s_adapted).to(last_hidden_s_adapted.dtype)
+
+        fused_s = gate_s * last_hidden_s_normal + (
+            torch.ones_like(gate_s) - gate_s
+        ) * last_hidden_s_adapted
+        return gate_s, fused_s
+
+    def describe_ablation(self):
+        return {
+            "exp_name": self.exp_name,
+            "style_mode": self.style_mode,
+            "gate_mode": self.gate_mode,
+            "fixed_gate_value": self.fixed_gate_value,
+            "train_vision_last3": self.train_vision_last3,
+            "stats_scope": self.stats_scope,
+            "gate_init_bias": self.gate_init_bias,
+        }
+
     def _log_debug_once(self, image_s, image_t, debug, logits_s, loss):
         if not self.debug_print_once or self._has_printed_debug:
             return
@@ -241,15 +313,15 @@ class CustomCLIPGSPALegacy(nn.Module):
         _, last_hidden_t_normal = self._forward_visual_tail(h_t)
         _, last_hidden_t_adapted = self._forward_visual_tail(swapped["h_t_adapted"])
 
-        gate_s = self.gate(last_hidden_s_adapted).to(last_hidden_s_adapted.dtype)
-        fused_s = gate_s * last_hidden_s_normal + (
-            torch.ones_like(gate_s) - gate_s
-        ) * last_hidden_s_adapted
+        gate_s, fused_s = self._compute_gate(
+            last_hidden_s_normal, last_hidden_s_adapted
+        )
 
         logits_s = self._encode_logits(fused_s)
-        loss = F.cross_entropy(
+        loss_ce = F.cross_entropy(
             logits_s, label_s, label_smoothing=self.label_smoothing
         )
+        loss = loss_ce
 
         debug = {
             "h_s": h_s,
@@ -267,6 +339,7 @@ class CustomCLIPGSPALegacy(nn.Module):
         acc = compute_accuracy(logits_s, label_s)[0].item()
         return {
             "loss": loss,
+            "loss_ce": loss_ce.detach(),
             "acc_src": torch.tensor(acc, device=loss.device),
             "gate_mean": gate_s.mean().detach(),
             "gate_std": gate_s.std(unbiased=False).detach(),
@@ -283,8 +356,21 @@ class CustomCLIPGSPALegacy(nn.Module):
 class GSPALegacy(TrainerXU):
     def check_cfg(self, cfg):
         assert cfg.TRAINER.GSPA_LEGACY.PREC in ["fp16", "fp32", "amp"]
-        assert cfg.TRAINER.GSPA_LEGACY.STATS_SCOPE == "all_tokens"
         assert cfg.TRAINER.GSPA_LEGACY.INJECT_AFTER_BLOCK >= 0
+        assert cfg.TRAINER.GSPA_LEGACY.ABLATION.GATE_MODE in [
+            "learned",
+            "fixed",
+            "normal_only",
+        ]
+        assert cfg.TRAINER.GSPA_LEGACY.ABLATION.STYLE_MODE in [
+            "cross",
+            "identity",
+            "none",
+        ]
+        assert cfg.TRAINER.GSPA_LEGACY.ABLATION.STATS_SCOPE in [
+            "all_tokens",
+            "patch_only",
+        ]
 
     def build_model(self):
         cfg = self.cfg
@@ -304,6 +390,7 @@ class GSPALegacy(TrainerXU):
 
         self.model.to(self.device)
         print(f"# params: {count_num_param(self.model):,}")
+        self._print_experiment_header()
 
         param_groups = self._build_param_groups()
         self.optim = build_optimizer(self.model, cfg.OPTIM, param_groups=param_groups)
@@ -321,7 +408,8 @@ class GSPALegacy(TrainerXU):
 
     def _freeze_parameters(self):
         cfg = self.cfg
-        last_n = cfg.TRAINER.GSPA_LEGACY.TRAIN_VISUAL_LAST_N
+        gspa_cfg = cfg.TRAINER.GSPA_LEGACY
+        last_n = gspa_cfg.TRAIN_VISUAL_LAST_N
         visual_blocks = self.model.visual.transformer.resblocks
         start_block = max(len(visual_blocks) - last_n, 0)
 
@@ -331,17 +419,20 @@ class GSPALegacy(TrainerXU):
         self.model.prompt_learner.ctx.requires_grad_(True)
         for param in self.model.prompt_learner.meta_net.parameters():
             param.requires_grad_(True)
-        for param in self.model.gate.parameters():
-            param.requires_grad_(True)
 
-        for block in list(visual_blocks)[start_block:]:
-            for param in block.parameters():
+        if gspa_cfg.ABLATION.GATE_MODE == "learned":
+            for param in self.model.gate.parameters():
                 param.requires_grad_(True)
 
-        for param in self.model.visual.ln_post.parameters():
-            param.requires_grad_(True)
-        if self.model.visual_projection is not None:
-            self.model.visual_projection.requires_grad_(True)
+        if gspa_cfg.ABLATION.TRAIN_VISION_LAST3:
+            for block in list(visual_blocks)[start_block:]:
+                for param in block.parameters():
+                    param.requires_grad_(True)
+
+            for param in self.model.visual.ln_post.parameters():
+                param.requires_grad_(True)
+            if self.model.visual_projection is not None:
+                self.model.visual_projection.requires_grad_(True)
 
         if cfg.TRAINER.GSPA_LEGACY.TRAIN_LOGIT_SCALE:
             self.model.logit_scale.requires_grad_(True)
@@ -352,6 +443,29 @@ class GSPALegacy(TrainerXU):
         print("Trainable parameters:")
         for name in enabled:
             print(f"  - {name}")
+        num_trainable = sum(
+            param.numel() for _, param in self.model.named_parameters() if param.requires_grad
+        )
+        print(f"Number of trainable parameters: {num_trainable:,}")
+
+    def _print_experiment_header(self):
+        info = self.model.describe_ablation()
+        source_domains = getattr(self.cfg.DATASET, "SOURCE_DOMAINS", [])
+        target_domains = getattr(self.cfg.DATASET, "TARGET_DOMAINS", [])
+        if isinstance(source_domains, (list, tuple)) and len(source_domains) == 1:
+            source_domains = source_domains[0]
+        if isinstance(target_domains, (list, tuple)) and len(target_domains) == 1:
+            target_domains = target_domains[0]
+        print("Experiment name:", info["exp_name"])
+        print("Source domain:", source_domains)
+        print("Target domain:", target_domains)
+        print("Seed:", self.cfg.SEED)
+        print("STYLE_MODE:", info["style_mode"])
+        print("GATE_MODE:", info["gate_mode"])
+        print("FIXED_GATE_VALUE:", info["fixed_gate_value"])
+        print("TRAIN_VISION_LAST3:", info["train_vision_last3"])
+        print("STATS_SCOPE:", info["stats_scope"])
+        print("Gate init bias:", info["gate_init_bias"])
 
     def _collect_trainable(self, params_or_modules):
         params = []
@@ -470,6 +584,47 @@ class GSPALegacy(TrainerXU):
     def model_inference(self, input):
         model = self._model_ref()
         return model.forward_inference(input)
+
+    def resume_model_if_exist(self, directory):
+        names = self.get_model_names()
+        file_missing = False
+
+        for name in names:
+            path = osp.join(directory, name)
+            if not osp.exists(path):
+                file_missing = True
+                break
+
+        if file_missing:
+            print("No checkpoint found, train from scratch")
+            return 0
+
+        print(f"Found checkpoint at {directory} (will resume training)")
+
+        for name in names:
+            path = osp.join(directory, name)
+            checkpoint_file = osp.join(path, "checkpoint")
+            with open(checkpoint_file, "r") as f:
+                model_name = f.readlines()[0].strip("\n")
+            model_path = osp.join(path, model_name)
+            print(f'Loading checkpoint from "{model_path}"')
+
+            checkpoint = load_checkpoint_compat(model_path)
+            self._models[name].load_state_dict(checkpoint["state_dict"])
+            print("Loaded model weights")
+
+            if self._optims[name] is not None and "optimizer" in checkpoint:
+                self._optims[name].load_state_dict(checkpoint["optimizer"])
+                print("Loaded optimizer")
+
+            if self._scheds[name] is not None and "scheduler" in checkpoint:
+                self._scheds[name].load_state_dict(checkpoint["scheduler"])
+                print("Loaded scheduler")
+
+            start_epoch = checkpoint["epoch"]
+            print(f"Previous epoch: {start_epoch}")
+
+        return start_epoch
 
     def load_model(self, directory, epoch=None):
         if not directory:

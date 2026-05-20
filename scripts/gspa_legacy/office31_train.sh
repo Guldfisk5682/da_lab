@@ -15,6 +15,20 @@ TRAINER_DIR="${TRAINER_DIR:-${TRAINER}}"
 OUTPUT_DIR="${OUTPUT_DIR:-}"
 DEBUG_PRINT_ONCE="${DEBUG_PRINT_ONCE:-False}"
 BACKBONE="${BACKBONE:-}"
+EXTRA_OPTS="${EXTRA_OPTS:-}"
+
+normalize_bool() {
+  case "${1}" in
+    1|true|TRUE|True|yes|YES|on|ON) echo "True" ;;
+    0|false|FALSE|False|no|NO|off|OFF) echo "False" ;;
+    *)
+      echo "Unsupported boolean value: ${1}" >&2
+      exit 3
+      ;;
+  esac
+}
+
+DEBUG_PRINT_ONCE="$(normalize_bool "${DEBUG_PRINT_ONCE}")"
 
 if [ "${DATA}" = "/path/to/datasets" ]; then
   echo "Please set DATA to a real dataset root before training." >&2
@@ -49,5 +63,11 @@ CMD+=(
   --
   TRAINER.GSPA_LEGACY.DEBUG.PRINT_ONCE "${DEBUG_PRINT_ONCE}"
 )
+
+if [ -n "${EXTRA_OPTS}" ]; then
+  # shellcheck disable=SC2206
+  EXTRA_ARGS=(${EXTRA_OPTS})
+  CMD+=("${EXTRA_ARGS[@]}")
+fi
 
 "${CMD[@]}"

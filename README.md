@@ -205,6 +205,44 @@ results/office31/GSPALegacy/seed1_summary.md
 export BACKBONE=/path/to/clip_checkpoint.pt
 ```
 
+### Legacy-GSPA Ablation
+
+当前第一轮只实现了 `L0/L1/L2` 三组：
+
+- `L0`: full legacy
+- `L1`: fixed gate
+- `L2`: normal-only
+
+先生成配置：
+
+```bash
+python scripts/gspa_legacy_ablation/make_ablation_configs.py
+```
+
+单任务运行示例：
+
+```bash
+export DATA=/path/to/datasets
+export DATASET_CONFIG=configs/datasets/office31.yaml
+
+bash scripts/gspa_legacy_ablation/run_one.sh L0 A W 1
+```
+
+批量运行当前三组：
+
+```bash
+export DATA=/path/to/datasets
+export DATASET_CONFIG=configs/datasets/office31.yaml
+
+bash scripts/gspa_legacy_ablation/run_office31_ablation.sh
+```
+
+收集结果：
+
+```bash
+python scripts/gspa_legacy_ablation/collect_results.py
+```
+
 ### 可用超参数
 
 脚本直接使用的环境变量：

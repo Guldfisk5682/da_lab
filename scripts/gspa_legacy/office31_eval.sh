@@ -16,6 +16,7 @@ TASK_TAG="$(echo "${SOURCE_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')2$(ec
 MODEL_DIR="${MODEL_DIR:-output/office31/${TRAINER_DIR}/${TASK_TAG}/seed${SEED}}"
 LOAD_EPOCH="${LOAD_EPOCH:-}"
 BACKBONE="${BACKBONE:-}"
+EXTRA_OPTS="${EXTRA_OPTS:-}"
 
 if [ "${DATA}" = "/path/to/datasets" ]; then
   echo "Please set DATA to a real dataset root before evaluation." >&2
@@ -63,6 +64,13 @@ fi
 
 if [ -n "${BACKBONE}" ]; then
   CMD+=(--backbone "${BACKBONE}")
+fi
+
+if [ -n "${EXTRA_OPTS}" ]; then
+  CMD+=(-- )
+  # shellcheck disable=SC2206
+  EXTRA_ARGS=(${EXTRA_OPTS})
+  CMD+=("${EXTRA_ARGS[@]}")
 fi
 
 "${CMD[@]}"
