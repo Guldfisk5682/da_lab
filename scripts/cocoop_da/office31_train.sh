@@ -23,9 +23,9 @@ if [ ! -d "${DATA}" ]; then
   exit 2
 fi
 
-PROMPT_TRAIN="false"
+PROMPT_TRAIN="False"
 if [ "${STAGE}" = "2" ]; then
-  PROMPT_TRAIN="true"
+  PROMPT_TRAIN="True"
 fi
 
 TASK_TAG="$(echo "${SOURCE_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')2$(echo "${TARGET_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')"

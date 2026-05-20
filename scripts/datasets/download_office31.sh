@@ -49,7 +49,11 @@ If this mirror becomes unavailable, provide a local archive explicitly:
 
   OFFICE31_ARCHIVE=/path/to/domain_adaptation_images.tar.gz DATA_ROOT=${DATA_ROOT} $0
 EOF
-    python -m gdown --fuzzy "https://drive.google.com/uc?id=${OFFICE31_FILE_ID}" -O "${ARCHIVE_PATH}"
+    if python -m gdown --help 2>&1 | grep -q -- "--fuzzy"; then
+      python -m gdown --fuzzy "https://drive.google.com/uc?id=${OFFICE31_FILE_ID}" -O "${ARCHIVE_PATH}"
+    else
+      python -m gdown "https://drive.google.com/uc?id=${OFFICE31_FILE_ID}" -O "${ARCHIVE_PATH}"
+    fi
   fi
 fi
 

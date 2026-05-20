@@ -64,6 +64,18 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-05-19: Added an OfficeHome dataset config and a dedicated OfficeHome training script for CoCoOpDAV0.
 - 2026-05-19: Diagnosed that CoOp does not provide an Office-31 downloader or a real dataset-root resolver; added a practical Office-31 download-and-normalize script and made the train/eval scripts fail fast when `DATA` is still a placeholder.
 - 2026-05-19: Added an Office-31 layout verification script and expanded the README with a full cloud workflow covering environment setup, download, verification, training, and evaluation.
+- 2026-05-19: Fixed Office-31 download to work with older `gdown` by falling back when `--fuzzy` is unsupported.
+- 2026-05-19: Office-31 download from Google Drive timed out; verified an existing dataset at `/workspace/qw/DAMP-main/dataset/office31` and linked it into `da_lab/data/office31` for training.
+- 2026-05-19: Training crashed because `--` was included in `args.opts`; stripped the leading `--` in `train.py` before merging config overrides.
+- 2026-05-19: Training crashed on a YACS type mismatch for `TRAINER.COCOOP_DA.TRAIN.TRAIN_PROMPT_LEARNER`; updated the train script to pass `True/False` instead of lowercase strings.
+- 2026-05-19: Training crashed with fp16 vs fp32 mismatch in `ShallowGate`; casted reference stats to the patch-token dtype/device before fusion.
+- 2026-05-19: Training still hit fp16 vs fp32 in `ShallowAdaptation`; casted scale/bias to the token dtype to keep adapted tokens in fp16.
+- 2026-05-19: Training still hit fp16 vs fp32; casted normalized tokens to patch-token dtype before shallow adaptation.
+- 2026-05-19: Training still hit fp16 vs fp32; casted adapted tokens to patch-token dtype before gating.
+- 2026-05-19: Training still hit fp16 vs fp32; aligned gate inputs to LayerNorm weight dtype inside `ShallowGate`.
+- 2026-05-19: Training hit fp16 vs fp32 in transformer attention; replaced scalar `1.0` with `torch.ones_like(alpha)` to keep fused tokens in fp16.
+- 2026-05-19: Training still hit fp16 vs fp32 in transformer blocks; cast fused hidden tokens to the original hidden dtype before forwarding.
+- 2026-05-20: Added `office31_train_all.sh` to run all six Office-31 SS-STDA tasks sequentially with auto-eval.
 
 ---
 

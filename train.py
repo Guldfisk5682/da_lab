@@ -237,4 +237,6 @@ if __name__ == "__main__":
         help="modify config options using the command-line",
     )
     args = parser.parse_args()
+    if args.opts and args.opts[0] == "--":
+        args.opts = args.opts[1:]
     main(args)

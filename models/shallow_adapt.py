@@ -56,7 +56,9 @@ class ShallowAdaptation(nn.Module):
 
     def forward(self, normalized_tokens, ref_mu, ref_std):
         restored = normalized_tokens * ref_std + ref_mu
-        return restored * (1.0 + self.scale) + self.bias
+        scale = self.scale.to(dtype=restored.dtype)
+        bias = self.bias.to(dtype=restored.dtype)
+        return restored * (1.0 + scale) + bias
 
 
 class ShallowGate(nn.Module):
@@ -72,6 +74,11 @@ class ShallowGate(nn.Module):
         nn.init.constant_(self.net[-1].bias, init_bias)
 
     def forward(self, p_ori, p_adapted):
+        target_dtype = self.norm_ori.weight.dtype
+        if p_ori.dtype != target_dtype:
+            p_ori = p_ori.to(dtype=target_dtype)
+        if p_adapted.dtype != target_dtype:
+            p_adapted = p_adapted.to(dtype=target_dtype)
         x = torch.cat(
             [self.norm_ori(p_ori), self.norm_adp(p_adapted)],
             dim=-1,

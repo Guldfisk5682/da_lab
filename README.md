@@ -137,6 +137,18 @@ export STAGE=2
 bash scripts/cocoop_da/office31_train.sh
 ```
 
+### 一键跑完 Office-31 六个任务
+
+该脚本会依次训练并在每个任务末尾自动评测（训练脚本内置评测逻辑），无需额外执行 `office31_eval.sh`。
+
+```bash
+export DATA=/path/to/datasets
+export SEED=1
+export STAGE=1
+
+bash scripts/cocoop_da/office31_train_all.sh
+```
+
 ### 可用超参数
 
 脚本直接使用的环境变量：
@@ -147,6 +159,9 @@ bash scripts/cocoop_da/office31_train.sh
 - `SEED`: 随机种子
 - `STAGE`: `1` 或 `2`
 - `OUTPUT_DIR`: 可选，自定义输出目录
+- `TRAINER`: 训练器名称（默认 `CoCoOpDAV0`）
+- `CFG`: 训练配置文件（默认 `configs/trainers/CoCoOpDA/vit_b16_v0.yaml`）
+- `DATASET_CONFIG`: 数据集配置（默认 `configs/datasets/office31.yaml`）
 
 如果要覆盖配置文件中的训练超参数，可以直接这样传：
 

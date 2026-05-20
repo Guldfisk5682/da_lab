@@ -117,11 +117,15 @@ class CustomCLIPDA(nn.Module):
         return cls_token, patch_tokens
 
     def _fuse_tokens(self, patch_tokens, ref_mu, ref_std):
+        ref_mu = ref_mu.to(device=patch_tokens.device, dtype=patch_tokens.dtype)
+        ref_std = ref_std.to(device=patch_tokens.device, dtype=patch_tokens.dtype)
         mu, std = compute_patch_stats(patch_tokens, eps=self.eps)
         normalized = (patch_tokens - mu) / (std + self.eps)
+        normalized = normalized.to(patch_tokens.dtype)
         adapted = self.shallow_adapt(normalized, ref_mu, ref_std)
+        adapted = adapted.to(patch_tokens.dtype)
         alpha = self.gate(patch_tokens, adapted)
-        fused = (1.0 - alpha) * patch_tokens + alpha * adapted
+        fused = (torch.ones_like(alpha) - alpha) * patch_tokens + alpha * adapted
         return {
             "mu": mu,
             "std": std,
@@ -161,6 +165,7 @@ class CustomCLIPDA(nn.Module):
         target_mu, target_std = self.target_stats_bank.get()
         source_state = self._fuse_tokens(patch_s, target_mu, target_std)
         hidden_s_fused = torch.cat([cls_s, source_state["fused"]], dim=1)
+        hidden_s_fused = hidden_s_fused.to(hidden_s.dtype)
         feat_s_fused = self.visual_adapter.forward_from(
             hidden_s_fused, start_layer=self.inject_layer + 1
         )
@@ -196,6 +201,7 @@ class CustomCLIPDA(nn.Module):
             alpha_t = None
 
         hidden_t_out = torch.cat([cls_t, patch_t_out], dim=1)
+        hidden_t_out = hidden_t_out.to(hidden_t.dtype)
         feat_t = self.visual_adapter.forward_from(
             hidden_t_out, start_layer=self.inject_layer + 1
         )
