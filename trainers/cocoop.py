@@ -9,19 +9,23 @@ from torch.cuda.amp import GradScaler, autocast
 
 from dassl.engine import TRAINER_REGISTRY, TrainerX
 from dassl.metrics import compute_accuracy
-from dassl.utils import load_pretrained_weights, load_checkpoint
+from dassl.utils import load_pretrained_weights
 from dassl.optim import build_optimizer, build_lr_scheduler
 
 from clip import clip
 from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
+from trainers.checkpoint_utils import load_checkpoint_compat
 
 _tokenizer = _Tokenizer()
 
 
 def load_clip_to_cpu(cfg):
     backbone_name = cfg.MODEL.BACKBONE.NAME
-    url = clip._MODELS[backbone_name]
-    model_path = clip._download(url)
+    if osp.isfile(backbone_name):
+        model_path = backbone_name
+    else:
+        url = clip._MODELS[backbone_name]
+        model_path = clip._download(url)
 
     try:
         # loading JIT archive
@@ -299,7 +303,7 @@ class CoCoOp(TrainerX):
             if not osp.exists(model_path):
                 raise FileNotFoundError('Model not found at "{}"'.format(model_path))
 
-            checkpoint = load_checkpoint(model_path)
+            checkpoint = load_checkpoint_compat(model_path)
             state_dict = checkpoint["state_dict"]
             epoch = checkpoint["epoch"]
 

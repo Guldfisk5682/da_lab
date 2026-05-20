@@ -8,7 +8,7 @@ from torch.cuda.amp import GradScaler, autocast
 from dassl.engine import TRAINER_REGISTRY, TrainerXU
 from dassl.metrics import compute_accuracy
 from dassl.optim import build_lr_scheduler, build_optimizer
-from dassl.utils import count_num_param, load_checkpoint, load_pretrained_weights
+from dassl.utils import count_num_param, load_pretrained_weights
 
 from models.shallow_adapt import (
     DomainStatsBank,
@@ -17,6 +17,7 @@ from models.shallow_adapt import (
     compute_patch_stats,
     softmax_entropy,
 )
+from trainers.checkpoint_utils import load_checkpoint_compat
 from trainers.cocoop import PromptLearner, TextEncoder, load_clip_to_cpu
 
 
@@ -420,7 +421,7 @@ class CoCoOpDAV0(TrainerXU):
             if not osp.exists(model_path):
                 raise FileNotFoundError(f'Model not found at "{model_path}"')
 
-            checkpoint = load_checkpoint(model_path)
+            checkpoint = load_checkpoint_compat(model_path)
             state_dict = checkpoint["state_dict"]
             epoch = checkpoint["epoch"]
 

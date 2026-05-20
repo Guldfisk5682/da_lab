@@ -150,6 +150,61 @@ export STAGE=1
 bash scripts/cocoop_da/office31_train_all.sh
 ```
 
+## Legacy-GSPA
+
+`Legacy-GSPA` 是当前用于复刻旧版 `gspa.py` 思路的干净实现。它和 `V0/V1` 的关键区别是：
+
+- 训练时使用 `source batch + target batch` 做 cross-style hidden-state augmentation
+- 测试时只走普通单图 CoCoOp/CLIP 推理
+- 测试时不使用 target batch，不做 style swap，不做 gate 融合
+
+### Legacy-GSPA 单任务训练
+
+```bash
+export DATA=/path/to/datasets
+export DATASET_CONFIG=configs/datasets/office31.yaml
+export SOURCE_DOMAIN=amazon
+export TARGET_DOMAIN=webcam
+export SEED=1
+
+bash scripts/gspa_legacy/office31_train.sh
+```
+
+### Legacy-GSPA 单任务评测
+
+```bash
+export DATA=/path/to/datasets
+export DATASET_CONFIG=configs/datasets/office31.yaml
+export SOURCE_DOMAIN=amazon
+export TARGET_DOMAIN=webcam
+export SEED=1
+export MODEL_DIR=output/office31/GSPALegacy/A2W/seed1
+
+bash scripts/gspa_legacy/office31_eval.sh
+```
+
+### Legacy-GSPA 六任务批量训练
+
+```bash
+export DATA=/path/to/datasets
+export DATASET_CONFIG=configs/datasets/office31.yaml
+export SEED=1
+
+bash scripts/gspa_legacy/office31_train_all.sh
+```
+
+批量脚本结束后会生成：
+
+```text
+results/office31/GSPALegacy/seed1_summary.md
+```
+
+如果你要用本地 checkpoint 路径而不是 `ViT-B/16` 名称，也可以直接覆盖：
+
+```bash
+export BACKBONE=/path/to/clip_checkpoint.pt
+```
+
 ### 可用超参数
 
 脚本直接使用的环境变量：

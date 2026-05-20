@@ -85,6 +85,16 @@ Main module: shallow hidden-state normalize-restore + learnable gate
   3. Run V1 Stage 1 with learned alpha using the default `office31_train_all.sh`.
   4. Run V1 ablations by overriding `TRAINER.COCOOP_DA.GATE.FORCE_ALPHA` to `0.0` and `1.0` in direct `train.py` calls or dedicated shell wrappers.
   5. Only if Stage 1 helps, promote to Stage 2 by setting `STAGE=2`; keep the same V1 config and compare against the Stage 1 checkpoint family.
+- 2026-05-20: Added a clean `GSPALegacy` trainer for the legacy cross-style hidden-state augmentation design. Training uses `source batch + target batch` to create full-token hidden-state swaps after block 4, gates only the final source hidden feature with bias `3.0`, and uses only source CE loss. Eval uses plain single-image CoCoOp-style inference and does not consume a target batch.
+- 2026-05-20: Added dedicated `scripts/gspa_legacy/office31_train.sh`, `office31_eval.sh`, and `office31_train_all.sh` so the legacy path does not depend on `STAGE`, `FORCE_ALPHA`, or the V0/V1 `COCOOP_DA` config switches.
+- 2026-05-20: Added Torch 2.6 checkpoint compatibility by bypassing Dassl's old `torch.load(weights_only=True)` path in local trainers. This fixes `eval-only` loading of `model.pth.tar-*` checkpoints under Torch 2.6.
+- 2026-05-20: Local smoke-test workflow for the remote agent:
+  1. Pull latest `main`.
+  2. Use `scripts/gspa_legacy/office31_train.sh` with `TRAINER=GSPALegacy` and `CFG=configs/trainers/GSPA_LEGACY/vit_b16.yaml`.
+  3. First verify a single A2W run with `DEBUG_PRINT_ONCE=True`; check that `h_s`, `h_t`, `h_s_adapted`, `last_hidden_s_normal`, `last_hidden_s_adapted`, `gate_s`, `fused_s`, and `logits_s` are printed once.
+  4. Confirm the first-batch `gate_mean` is close to `sigmoid(3.0)`, i.e. around `0.95`.
+  5. Use `scripts/gspa_legacy/office31_eval.sh` to confirm eval-only works without a target batch.
+  6. Only after the single-task sanity check passes, expand to `scripts/gspa_legacy/office31_train_all.sh`.
 
 ---
 
