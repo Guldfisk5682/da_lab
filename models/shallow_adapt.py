@@ -85,3 +85,27 @@ class ShallowGate(nn.Module):
         )
         alpha = torch.sigmoid(self.net(x))
         return alpha
+
+
+class FinalFeatureGate(nn.Module):
+    """Late feature gate for final image features."""
+
+    def __init__(self, dim, hidden_ratio=4, init_bias=-4.0):
+        super().__init__()
+        hidden_dim = max(1, dim // hidden_ratio)
+        self.norm = nn.LayerNorm(dim)
+        self.fc1 = nn.Linear(dim, hidden_dim)
+        self.act = nn.SiLU()
+        self.fc2 = nn.Linear(hidden_dim, 1)
+        nn.init.zeros_(self.fc2.weight)
+        nn.init.constant_(self.fc2.bias, init_bias)
+
+    def forward(self, feat_adapted):
+        target_dtype = self.norm.weight.dtype
+        if feat_adapted.dtype != target_dtype:
+            feat_adapted = feat_adapted.to(dtype=target_dtype)
+        x = self.norm(feat_adapted)
+        x = self.fc1(x)
+        x = self.act(x)
+        alpha = torch.sigmoid(self.fc2(x))
+        return alpha

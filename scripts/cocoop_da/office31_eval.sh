@@ -5,9 +5,9 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 DATA="${DATA:-/path/to/datasets}"
-TRAINER="${TRAINER:-CoCoOpDAV0}"
+TRAINER="${TRAINER:-CoCoOpDAV1}"
 DATASET_CONFIG="${DATASET_CONFIG:-configs/datasets/office31.yaml}"
-CFG="${CFG:-configs/trainers/CoCoOpDA/vit_b16_v0.yaml}"
+CFG="${CFG:-configs/trainers/CoCoOpDA/vit_b16_v1.yaml}"
 SOURCE_DOMAIN="${SOURCE_DOMAIN:-amazon}"
 TARGET_DOMAIN="${TARGET_DOMAIN:-webcam}"
 SEED="${SEED:-1}"
@@ -16,6 +16,7 @@ TRAINER_DIR="${TRAINER_DIR:-${TRAINER}}"
 TASK_TAG="$(echo "${SOURCE_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')2$(echo "${TARGET_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')"
 MODEL_DIR="${MODEL_DIR:-output/office31/${TRAINER_DIR}/${TASK_TAG}/seed${SEED}/stage${STAGE}}"
 LOAD_EPOCH="${LOAD_EPOCH:-}"
+FORCE_ALPHA="${FORCE_ALPHA:--1.0}"
 
 if [ "${DATA}" = "/path/to/datasets" ]; then
   echo "Please set DATA to a real dataset root before evaluation." >&2
@@ -64,6 +65,7 @@ fi
 CMD+=(
   --
   TRAINER.COCOOP_DA.TRAIN.STAGE "${STAGE}"
+  TRAINER.COCOOP_DA.GATE.FORCE_ALPHA "${FORCE_ALPHA}"
 )
 
 "${CMD[@]}"

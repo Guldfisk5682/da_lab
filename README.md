@@ -159,9 +159,9 @@ bash scripts/cocoop_da/office31_train_all.sh
 - `SEED`: 随机种子
 - `STAGE`: `1` 或 `2`
 - `OUTPUT_DIR`: 可选，自定义输出目录
-- `TRAINER`: 训练器名称（默认 `CoCoOpDAV0`）
+- `TRAINER`: 训练器名称（默认 `CoCoOpDAV1`）
 - `TRAINER_DIR`: 可选，输出目录标签；默认跟随 `TRAINER`
-- `CFG`: 训练配置文件（默认 `configs/trainers/CoCoOpDA/vit_b16_v0.yaml`）
+- `CFG`: 训练配置文件（默认 `configs/trainers/CoCoOpDA/vit_b16_v1.yaml`）
 - `DATASET_CONFIG`: 数据集配置（默认 `configs/datasets/office31.yaml`）
 
 如果要覆盖配置文件中的训练超参数，可以直接这样传：
@@ -170,11 +170,12 @@ bash scripts/cocoop_da/office31_train_all.sh
 python train.py \
   --root "${DATA}" \
   --seed "${SEED}" \
-  --trainer CoCoOpDAV0 \
+  --trainer CoCoOpDAV1 \
   --dataset-config-file configs/datasets/office31.yaml \
-  --config-file configs/trainers/CoCoOpDA/vit_b16_v0.yaml \
+  --config-file configs/trainers/CoCoOpDA/vit_b16_v1.yaml \
   --source-domains "${SOURCE_DOMAIN}" \
   --target-domains "${TARGET_DOMAIN}" \
+  -- \
   TRAINER.COCOOP.N_CTX 4 \
   OPTIM.LR 0.002 \
   OPTIM.MAX_EPOCH 10
@@ -183,7 +184,7 @@ python train.py \
 当前主配置文件：
 
 ```text
-configs/trainers/CoCoOpDA/vit_b16_v0.yaml
+configs/trainers/CoCoOpDA/vit_b16_v1.yaml
 ```
 
 默认数据集配置：
@@ -212,6 +213,27 @@ configs/datasets/office31_flex.yaml
 - `OPTIM.MAX_EPOCH = 10`
 - `TRAINER.COCOOP_DA.INJECT_LAYER = 3`
 - `TRAINER.COCOOP_DA.ADAPT_MODE = "s2t"`
+- `TRAINER.COCOOP_DA.GATE.FORCE_ALPHA = -1.0` 表示 learned alpha
+- `TRAINER.COCOOP_DA.GATE.FORCE_ALPHA = 0.0` 表示只用 normal feature
+- `TRAINER.COCOOP_DA.GATE.FORCE_ALPHA = 1.0` 表示只用 adapted feature
+
+V1 ablation 例子：
+
+```bash
+export DATA=/path/to/datasets
+export SEED=1
+export STAGE=1
+export FORCE_ALPHA=0.0
+bash scripts/cocoop_da/office31_train_all.sh
+```
+
+```bash
+export DATA=/path/to/datasets
+export SEED=1
+export STAGE=1
+export FORCE_ALPHA=1.0
+bash scripts/cocoop_da/office31_train_all.sh
+```
 
 ## 评测命令
 
@@ -221,7 +243,7 @@ export SOURCE_DOMAIN=amazon
 export TARGET_DOMAIN=webcam
 export SEED=1
 export STAGE=1
-export MODEL_DIR=output/office31/CoCoOpDAV0/A2W/seed1/stage1
+export MODEL_DIR=output/office31/CoCoOpDAV1/A2W/seed1/stage1
 
 bash scripts/cocoop_da/office31_eval.sh
 ```

@@ -5,14 +5,15 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 DATA="${DATA:-/path/to/datasets}"
-TRAINER="${TRAINER:-CoCoOpDAV0}"
+TRAINER="${TRAINER:-CoCoOpDAV1}"
 DATASET_CONFIG="${DATASET_CONFIG:-configs/datasets/office_home.yaml}"
-CFG="${CFG:-configs/trainers/CoCoOpDA/vit_b16_v0.yaml}"
+CFG="${CFG:-configs/trainers/CoCoOpDA/vit_b16_v1.yaml}"
 SOURCE_DOMAIN="${SOURCE_DOMAIN:-art}"
 TARGET_DOMAIN="${TARGET_DOMAIN:-clipart}"
 SEED="${SEED:-1}"
 STAGE="${STAGE:-1}"
 TRAINER_DIR="${TRAINER_DIR:-${TRAINER}}"
+FORCE_ALPHA="${FORCE_ALPHA:--1.0}"
 
 PROMPT_TRAIN="false"
 if [ "${STAGE}" = "2" ]; then
@@ -33,4 +34,5 @@ python train.py \
   --target-domains "${TARGET_DOMAIN}" \
   -- \
   TRAINER.COCOOP_DA.TRAIN.STAGE "${STAGE}" \
-  TRAINER.COCOOP_DA.TRAIN.TRAIN_PROMPT_LEARNER "${PROMPT_TRAIN}"
+  TRAINER.COCOOP_DA.TRAIN.TRAIN_PROMPT_LEARNER "${PROMPT_TRAIN}" \
+  TRAINER.COCOOP_DA.GATE.FORCE_ALPHA "${FORCE_ALPHA}"

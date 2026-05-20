@@ -5,14 +5,15 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 DATA="${DATA:-/path/to/datasets}"
-TRAINER="${TRAINER:-CoCoOpDAV0}"
+TRAINER="${TRAINER:-CoCoOpDAV1}"
 DATASET_CONFIG="${DATASET_CONFIG:-configs/datasets/office31.yaml}"
-CFG="${CFG:-configs/trainers/CoCoOpDA/vit_b16_v0.yaml}"
+CFG="${CFG:-configs/trainers/CoCoOpDA/vit_b16_v1.yaml}"
 SOURCE_DOMAIN="${SOURCE_DOMAIN:-amazon}"
 TARGET_DOMAIN="${TARGET_DOMAIN:-webcam}"
 SEED="${SEED:-1}"
 STAGE="${STAGE:-1}"
 TRAINER_DIR="${TRAINER_DIR:-${TRAINER}}"
+FORCE_ALPHA="${FORCE_ALPHA:--1.0}"
 
 if [ "${DATA}" = "/path/to/datasets" ]; then
   echo "Please set DATA to a real dataset root before training." >&2
@@ -43,4 +44,5 @@ python train.py \
   --target-domains "${TARGET_DOMAIN}" \
   -- \
   TRAINER.COCOOP_DA.TRAIN.STAGE "${STAGE}" \
-  TRAINER.COCOOP_DA.TRAIN.TRAIN_PROMPT_LEARNER "${PROMPT_TRAIN}"
+  TRAINER.COCOOP_DA.TRAIN.TRAIN_PROMPT_LEARNER "${PROMPT_TRAIN}" \
+  TRAINER.COCOOP_DA.GATE.FORCE_ALPHA "${FORCE_ALPHA}"

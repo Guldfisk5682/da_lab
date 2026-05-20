@@ -27,6 +27,7 @@ import datasets.imagenet_r
 import trainers.coop
 import trainers.cocoop
 import trainers.cocoop_da_v0
+import trainers.cocoop_da_v1
 import trainers.zsclip
 
 
@@ -114,6 +115,8 @@ def extend_cfg(cfg):
     cfg.TRAINER.COCOOP_DA.GATE = CN()
     cfg.TRAINER.COCOOP_DA.GATE.TYPE = "token_channel"
     cfg.TRAINER.COCOOP_DA.GATE.INIT_BIAS = -2.0
+    cfg.TRAINER.COCOOP_DA.GATE.HIDDEN_RATIO = 4
+    cfg.TRAINER.COCOOP_DA.GATE.FORCE_ALPHA = -1.0
 
     cfg.TRAINER.COCOOP_DA.LOSS = CN()
     cfg.TRAINER.COCOOP_DA.LOSS.LAMBDA_CONS = 0.1

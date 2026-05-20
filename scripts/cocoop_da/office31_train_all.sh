@@ -5,12 +5,13 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 DATA="${DATA:-/path/to/datasets}"
-TRAINER="${TRAINER:-CoCoOpDAV0}"
+TRAINER="${TRAINER:-CoCoOpDAV1}"
 DATASET_CONFIG="${DATASET_CONFIG:-configs/datasets/office31.yaml}"
-CFG="${CFG:-configs/trainers/CoCoOpDA/vit_b16_v0.yaml}"
+CFG="${CFG:-configs/trainers/CoCoOpDA/vit_b16_v1.yaml}"
 SEED="${SEED:-1}"
 STAGE="${STAGE:-1}"
 TRAINER_DIR="${TRAINER_DIR:-${TRAINER}}"
+FORCE_ALPHA="${FORCE_ALPHA:--1.0}"
 
 if [ "${DATA}" = "/path/to/datasets" ]; then
   echo "Please set DATA to a real dataset root before training." >&2
@@ -50,6 +51,7 @@ for task in "${TASKS[@]}"; do
   TARGET_DOMAIN="${TARGET_DOMAIN}" \
   SEED="${SEED}" \
   STAGE="${STAGE}" \
+  FORCE_ALPHA="${FORCE_ALPHA}" \
     bash scripts/cocoop_da/office31_train.sh
 
   echo "Evaluating Office-31: ${SOURCE_DOMAIN} -> ${TARGET_DOMAIN}"
@@ -63,6 +65,7 @@ for task in "${TASKS[@]}"; do
   TARGET_DOMAIN="${TARGET_DOMAIN}" \
   SEED="${SEED}" \
   STAGE="${STAGE}" \
+  FORCE_ALPHA="${FORCE_ALPHA}" \
     bash scripts/cocoop_da/office31_eval.sh
 
 done

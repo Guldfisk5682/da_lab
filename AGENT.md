@@ -78,6 +78,13 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-05-20: Added `office31_train_all.sh` to run all six Office-31 SS-STDA tasks sequentially with auto-eval.
 - 2026-05-20: Updated the Office-31 scripts so output directories follow the selected trainer name and `office31_train_all.sh` now performs explicit post-train evaluation per task.
 - 2026-05-20: Fixed auto-eval for baseline trainers by making `office31_eval.sh` fall back to the latest `model.pth.tar-*` checkpoint when `model-best.pth.tar` is absent.
+- 2026-05-20: Implemented V1 `FinalFeatureGate` as the default DA variant. V1 keeps the shallow layer-3 restat step but delays gating to the final image feature level: `feat_normal` and `feat_adapted` are produced separately, then blended by a scalar gate with `LayerNorm -> Linear(dim, dim/4) -> SiLU -> Linear(dim/4, 1) -> Sigmoid`, zero-initialized last weight, and bias `-4.0`.
+- 2026-05-20: Remote experiment workflow for V1:
+  1. Pull latest `main` and verify the default trainer/config are `CoCoOpDAV1` and `configs/trainers/CoCoOpDA/vit_b16_v1.yaml`.
+  2. Run the official CoCoOp baseline by overriding `TRAINER=CoCoOp` and `CFG=configs/trainers/CoCoOp/vit_b16_c4_ep10_batch1_ctxv1.yaml`.
+  3. Run V1 Stage 1 with learned alpha using the default `office31_train_all.sh`.
+  4. Run V1 ablations by overriding `TRAINER.COCOOP_DA.GATE.FORCE_ALPHA` to `0.0` and `1.0` in direct `train.py` calls or dedicated shell wrappers.
+  5. Only if Stage 1 helps, promote to Stage 2 by setting `STAGE=2`; keep the same V1 config and compare against the Stage 1 checkpoint family.
 
 ---
 
