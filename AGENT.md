@@ -77,6 +77,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-05-19: Training still hit fp16 vs fp32 in transformer blocks; cast fused hidden tokens to the original hidden dtype before forwarding.
 - 2026-05-20: Added `office31_train_all.sh` to run all six Office-31 SS-STDA tasks sequentially with auto-eval.
 - 2026-05-20: Updated the Office-31 scripts so output directories follow the selected trainer name and `office31_train_all.sh` now performs explicit post-train evaluation per task.
+- 2026-05-20: Fixed auto-eval for baseline trainers by making `office31_eval.sh` fall back to the latest `model.pth.tar-*` checkpoint when `model-best.pth.tar` is absent.
 
 ---
 

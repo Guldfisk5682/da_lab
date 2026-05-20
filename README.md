@@ -237,6 +237,11 @@ bash scripts/cocoop_da/office31_eval.sh
 - `LOAD_EPOCH`: 可选，指定加载某个 epoch；不填则默认读 best/last 逻辑
 - `TRAINER_DIR`: 可选，若不手动设置 `MODEL_DIR`，则用于拼默认 checkpoint 路径
 
+补充：
+
+- 如果 `MODEL_DIR` 下存在 `model-best.pth.tar`，评测脚本优先加载它
+- 如果不存在 `model-best.pth.tar`，评测脚本会自动回退到该目录下最新的 `model.pth.tar-*`
+
 如果你要直接跑六个 Office-31 任务，只需要替换：
 
 - `SOURCE_DOMAIN`

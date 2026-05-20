@@ -32,6 +32,18 @@ if [ ! -d "${MODEL_DIR}" ]; then
   exit 3
 fi
 
+if [ -z "${LOAD_EPOCH}" ]; then
+  BEST_MODEL_COUNT="$(find "${MODEL_DIR}" -type f -name 'model-best.pth.tar' | wc -l | tr -d ' ')"
+  if [ "${BEST_MODEL_COUNT}" = "0" ]; then
+    LATEST_CHECKPOINT="$(find "${MODEL_DIR}" -type f -name 'model.pth.tar-*' | sort -V | tail -n 1)"
+    if [ -n "${LATEST_CHECKPOINT}" ]; then
+      LOAD_EPOCH="${LATEST_CHECKPOINT##*-}"
+      echo "No model-best checkpoint found under ${MODEL_DIR}"
+      echo "Falling back to the latest epoch checkpoint: ${LOAD_EPOCH}"
+    fi
+  fi
+fi
+
 CMD=(
   python train.py
   --root "${DATA}"
