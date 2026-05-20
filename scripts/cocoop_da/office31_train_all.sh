@@ -12,6 +12,8 @@ SEED="${SEED:-1}"
 STAGE="${STAGE:-1}"
 TRAINER_DIR="${TRAINER_DIR:-${TRAINER}}"
 FORCE_ALPHA="${FORCE_ALPHA:--1.0}"
+RESULTS_DIR="${RESULTS_DIR:-results/office31/${TRAINER_DIR}}"
+SUMMARY_PATH="${SUMMARY_PATH:-${RESULTS_DIR}/seed${SEED}_stage${STAGE}_summary.md}"
 
 if [ "${DATA}" = "/path/to/datasets" ]; then
   echo "Please set DATA to a real dataset root before training." >&2
@@ -69,3 +71,16 @@ for task in "${TASKS[@]}"; do
     bash scripts/cocoop_da/office31_eval.sh
 
 done
+
+mkdir -p "${RESULTS_DIR}"
+
+python scripts/parse_office31_results.py \
+  --root output/office31 \
+  --trainer-dir "${TRAINER_DIR}" \
+  --pattern "*/seed${SEED}/stage${STAGE}/log.txt" \
+  --markdown \
+  --output "${SUMMARY_PATH}"
+
+echo "==============================================="
+echo "Office-31 summary saved to: ${SUMMARY_PATH}"
+echo "==============================================="

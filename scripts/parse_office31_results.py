@@ -7,6 +7,16 @@ import statistics
 from pathlib import Path
 
 
+TASK_NAME_MAP = {
+    "A2D": "amazon -> dslr",
+    "A2W": "amazon -> webcam",
+    "D2A": "dslr -> amazon",
+    "D2W": "dslr -> webcam",
+    "W2A": "webcam -> amazon",
+    "W2D": "webcam -> dslr",
+}
+
+
 def parse_last_metric(lines, regex, end_signal):
     values = []
     in_result = False
@@ -40,6 +50,58 @@ def collect_results(root, pattern, keyword, end_signal):
             continue
         results.append((path, value))
     return results
+
+
+def format_results(results, root, keyword, markdown=False):
+    values = [value for _, value in results]
+    mean = statistics.mean(values)
+    std = statistics.pstdev(values) if len(values) > 1 else 0.0
+
+    if markdown:
+        lines = [
+            "| Task | Transfer | Accuracy | Log |",
+            "| --- | --- | ---: | --- |",
+        ]
+        for path, value in results:
+            rel_path = path.relative_to(root)
+            task_tag = rel_path.parts[0] if rel_path.parts else "-"
+            transfer = TASK_NAME_MAP.get(task_tag, task_tag)
+            lines.append(
+                f"| {task_tag} | {transfer} | {value:.2f}% | `{rel_path}` |"
+            )
+        lines.extend(
+            [
+                "",
+                "| Summary | Value |",
+                "| --- | ---: |",
+                f"| Count | {len(values)} |",
+                f"| Mean {keyword} | {mean:.2f}% |",
+                f"| Std {keyword} | {std:.2f}% |",
+                f"| Min {keyword} | {min(values):.2f}% |",
+                f"| Max {keyword} | {max(values):.2f}% |",
+            ]
+        )
+        return "\n".join(lines) + "\n"
+
+    lines = []
+    for path, value in results:
+        try:
+            rel_path = path.relative_to(root)
+            display = str(rel_path)
+        except ValueError:
+            display = str(path)
+        lines.append(f"{display}: {value:.2f}%")
+    lines.extend(
+        [
+            "===",
+            f"count: {len(values)}",
+            f"mean {keyword}: {mean:.2f}%",
+            f"std {keyword}: {std:.2f}%",
+            f"min {keyword}: {min(values):.2f}%",
+            f"max {keyword}: {max(values):.2f}%",
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 def main():
@@ -81,6 +143,16 @@ def main():
         action="store_true",
         help="only print the summary",
     )
+    parser.add_argument(
+        "--markdown",
+        action="store_true",
+        help="render a markdown table instead of plain text",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="optional path to save the rendered summary",
+    )
     args = parser.parse_args()
 
     trainer_dir = args.trainer_dir
@@ -98,26 +170,24 @@ def main():
         print(f"No matching results found under {root}")
         raise SystemExit(1)
 
-    values = [value for _, value in results]
+    rendered = format_results(results, root, args.keyword, markdown=args.markdown)
 
-    if not args.quiet:
-        for path, value in results:
-            try:
-                rel_path = path.relative_to(root)
-                display = str(rel_path)
-            except ValueError:
-                display = str(path)
-            print(f"{display}: {value:.2f}%")
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered)
 
-    mean = statistics.mean(values)
-    std = statistics.pstdev(values) if len(values) > 1 else 0.0
-
-    print("===")
-    print(f"count: {len(values)}")
-    print(f"mean {args.keyword}: {mean:.2f}%")
-    print(f"std {args.keyword}: {std:.2f}%")
-    print(f"min {args.keyword}: {min(values):.2f}%")
-    print(f"max {args.keyword}: {max(values):.2f}%")
+    if args.markdown or not args.quiet:
+        print(rendered, end="")
+    else:
+        values = [value for _, value in results]
+        print("===")
+        print(f"count: {len(values)}")
+        print(f"mean {args.keyword}: {statistics.mean(values):.2f}%")
+        std = statistics.pstdev(values) if len(values) > 1 else 0.0
+        print(f"std {args.keyword}: {std:.2f}%")
+        print(f"min {args.keyword}: {min(values):.2f}%")
+        print(f"max {args.keyword}: {max(values):.2f}%")
 
 
 if __name__ == "__main__":

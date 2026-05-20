@@ -102,7 +102,7 @@ export SOURCE_DOMAIN=amazon
 export TARGET_DOMAIN=webcam
 export SEED=1
 export STAGE=1
-export MODEL_DIR=output/office31/cocoop_da_v0/A2W/seed1/stage1
+export MODEL_DIR=output/office31/CoCoOpDAV1/A2W/seed1/stage1
 
 bash scripts/cocoop_da/office31_eval.sh
 ```
@@ -140,6 +140,7 @@ bash scripts/cocoop_da/office31_train.sh
 ### 一键跑完 Office-31 六个任务
 
 该脚本会依次训练六个任务，并在每个任务训练结束后自动调用 `office31_eval.sh` 做评测。
+全部任务结束后，还会自动生成一个 markdown 汇总文件，默认保存到 `results/office31/CoCoOpDAV1/seed1_stage1_summary.md`；如果你切了 `TRAINER_DIR`、`SEED` 或 `STAGE`，文件名也会跟着变化。
 
 ```bash
 export DATA=/path/to/datasets
