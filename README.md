@@ -207,11 +207,22 @@ export BACKBONE=/path/to/clip_checkpoint.pt
 
 ### Legacy-GSPA Ablation
 
-当前第一轮只实现了 `L0/L1/L2` 三组：
+当前 ablation 入口支持以下实验组：
 
+- `B0`: CoCoOp baseline
+- `B1`: CoCoOp + last3 tuning
 - `L0`: full legacy
 - `L1`: fixed gate
 - `L2`: normal-only
+- `L3`: last3 frozen
+- `L4`: identity-style
+- `L5`: patch-only statistics
+
+其中 `B1` 通过 `GSPALegacy` 的等价配置实现：
+
+- `STYLE_MODE=none`
+- `GATE_MODE=normal_only`
+- `TRAIN_VISION_LAST3=true`
 
 先生成配置：
 
@@ -228,13 +239,23 @@ export DATASET_CONFIG=configs/datasets/office31.yaml
 bash scripts/gspa_legacy_ablation/run_one.sh L0 A W 1
 ```
 
-批量运行当前三组：
+批量运行默认会执行 `L0-L5` 六组：
 
 ```bash
 export DATA=/path/to/datasets
 export DATASET_CONFIG=configs/datasets/office31.yaml
 
 bash scripts/gspa_legacy_ablation/run_office31_ablation.sh
+```
+
+如果要单独补跑 baseline：
+
+```bash
+export DATA=/path/to/datasets
+export DATASET_CONFIG=configs/datasets/office31.yaml
+
+bash scripts/gspa_legacy_ablation/run_office31_ablation.sh B0
+bash scripts/gspa_legacy_ablation/run_office31_ablation.sh B1
 ```
 
 收集结果：

@@ -96,13 +96,19 @@ Main module: shallow hidden-state normalize-restore + learnable gate
   5. Use `scripts/gspa_legacy/office31_eval.sh` to confirm eval-only works without a target batch.
   6. Only after the single-task sanity check passes, expand to `scripts/gspa_legacy/office31_train_all.sh`.
 - 2026-05-20: Added the first ablation-study layer for `GSPALegacy`. Trainer-side naming is now standardized under `TRAINER.GSPA_LEGACY.ABLATION.*`, with support for `GATE_MODE`, `FIXED_GATE_VALUE`, `TRAIN_VISION_LAST3`, `STYLE_MODE`, and `STATS_SCOPE`.
-- 2026-05-20: Implemented `scripts/gspa_legacy_ablation/make_ablation_configs.py`, `run_one.sh`, `run_office31_ablation.sh`, and `collect_results.py`. Current scope is intentionally limited to `L0_full`, `L1_fixed_gate`, and `L2_normal_only`.
+- 2026-05-20: Implemented `scripts/gspa_legacy_ablation/make_ablation_configs.py`, `run_one.sh`, `run_office31_ablation.sh`, and `collect_results.py`. The first pass covered `L0_full`, `L1_fixed_gate`, and `L2_normal_only`.
 - 2026-05-20: Local ablation smoke validation used a tiny synthetic `Office31Flex` dataset and a local random ViT-B/16 checkpoint only to verify script/dataflow correctness. Verified that:
   1. `python scripts/gspa_legacy_ablation/make_ablation_configs.py` generates the three config files.
   2. `bash scripts/gspa_legacy_ablation/run_one.sh L0 A W 1` trains and evaluates into `output/office31_ablation/L0_full/A2W/seed1`.
   3. The log contains experiment metadata, ablation fields, parameter groups, `loss_ce`, and gate statistics.
   4. The first-batch `gate_mean` is about `0.9468`, consistent with `sigmoid(3.0)`.
   5. `python scripts/gspa_legacy_ablation/collect_results.py` successfully parses the A2W result and writes `results/office31_ablation_seed1.csv` and `.md`.
+- 2026-05-21: Extended the ablation suite to cover the remaining Legacy-GSPA variants: `L3_last3_frozen`, `L4_identity_style`, and `L5_patch_only`. The default batch launcher `scripts/gspa_legacy_ablation/run_office31_ablation.sh` now runs `L0-L5` when no experiment code is provided.
+- 2026-05-21: Added optional baseline entries to the ablation launcher:
+  1. `B0_cocoop` uses the standard `CoCoOp` trainer with `configs/trainers/CoCoOp/vit_b16_c4_ep10_batch1_ctxv1.yaml`.
+  2. `B1_last3_tuning` is implemented as the Legacy-equivalent path with `STYLE_MODE=none`, `GATE_MODE=normal_only`, and `TRAIN_VISION_LAST3=true`.
+  3. Both baseline entries write into `output/office31_ablation/...` so they can be summarized by the same `collect_results.py` script.
+- 2026-05-21: Added optional `BACKBONE` passthrough to `scripts/cocoop_da/office31_train.sh` and `office31_eval.sh`, which makes CoCoOp baseline smoke tests possible with a local checkpoint path instead of downloading CLIP weights.
 - 2026-05-20: Fixed `GSPALegacy` DataParallel training by routing `forward_train`/`forward_inference` through the underlying module when multiple GPUs are used.
 - 2026-05-20: Fixed `GSPALegacy` inference to run the full visual stack before the tail; previously `_encode_image_normal` skipped blocks 1..INJECT_AFTER_BLOCK, causing near-random accuracy.
 

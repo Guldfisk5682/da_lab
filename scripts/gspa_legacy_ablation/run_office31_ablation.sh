@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 if [ "$#" -eq 0 ]; then
-  EXPERIMENTS=(L0 L1 L2)
+  EXPERIMENTS=(L0 L1 L2 L3 L4 L5)
 else
   EXPERIMENTS=("$@")
 fi

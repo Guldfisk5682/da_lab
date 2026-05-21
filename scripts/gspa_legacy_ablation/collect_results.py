@@ -7,7 +7,15 @@ from pathlib import Path
 
 
 TASKS = ["A2W", "A2D", "D2W", "D2A", "W2D", "W2A"]
-EXPECTED_EXPERIMENTS = ["L0_full", "L1_fixed_gate", "L2_normal_only"]
+OPTIONAL_EXPERIMENTS = ["B0_cocoop", "B1_last3_tuning"]
+EXPECTED_EXPERIMENTS = [
+    "L0_full",
+    "L1_fixed_gate",
+    "L2_normal_only",
+    "L3_last3_frozen",
+    "L4_identity_style",
+    "L5_patch_only",
+]
 ACCURACY_RE = re.compile(r"\* accuracy: ([\d.+-eE]+)%")
 
 
@@ -49,7 +57,10 @@ def collect(root, seed):
         )
 
     experiments = []
-    for name in EXPECTED_EXPERIMENTS + discovered:
+    ordered_names = [name for name in OPTIONAL_EXPERIMENTS if name in discovered]
+    ordered_names += EXPECTED_EXPERIMENTS
+    ordered_names += discovered
+    for name in ordered_names:
         if name not in experiments:
             experiments.append(name)
 

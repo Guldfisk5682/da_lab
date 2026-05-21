@@ -72,6 +72,14 @@ BASE_CONFIG = {
 
 
 ABLATIONS = {
+    "office31_B1_last3_tuning.yaml": {
+        "EXP_NAME": "B1_last3_tuning",
+        "GATE_MODE": "normal_only",
+        "FIXED_GATE_VALUE": 1.0,
+        "TRAIN_VISION_LAST3": True,
+        "STYLE_MODE": "none",
+        "STATS_SCOPE": "all_tokens",
+    },
     "office31_L0_full.yaml": {
         "EXP_NAME": "L0_full",
         "GATE_MODE": "learned",
@@ -95,6 +103,30 @@ ABLATIONS = {
         "TRAIN_VISION_LAST3": True,
         "STYLE_MODE": "cross",
         "STATS_SCOPE": "all_tokens",
+    },
+    "office31_L3_last3_frozen.yaml": {
+        "EXP_NAME": "L3_last3_frozen",
+        "GATE_MODE": "learned",
+        "FIXED_GATE_VALUE": 0.95,
+        "TRAIN_VISION_LAST3": False,
+        "STYLE_MODE": "cross",
+        "STATS_SCOPE": "all_tokens",
+    },
+    "office31_L4_identity_style.yaml": {
+        "EXP_NAME": "L4_identity_style",
+        "GATE_MODE": "learned",
+        "FIXED_GATE_VALUE": 0.95,
+        "TRAIN_VISION_LAST3": True,
+        "STYLE_MODE": "identity",
+        "STATS_SCOPE": "all_tokens",
+    },
+    "office31_L5_patch_only.yaml": {
+        "EXP_NAME": "L5_patch_only",
+        "GATE_MODE": "learned",
+        "FIXED_GATE_VALUE": 0.95,
+        "TRAIN_VISION_LAST3": True,
+        "STYLE_MODE": "cross",
+        "STATS_SCOPE": "patch_only",
     },
 }
 

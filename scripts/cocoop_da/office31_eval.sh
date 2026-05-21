@@ -17,6 +17,7 @@ TASK_TAG="$(echo "${SOURCE_DOMAIN}" | cut -c1 | tr '[:lower:]' '[:upper:]')2$(ec
 MODEL_DIR="${MODEL_DIR:-output/office31/${TRAINER_DIR}/${TASK_TAG}/seed${SEED}/stage${STAGE}}"
 LOAD_EPOCH="${LOAD_EPOCH:-}"
 FORCE_ALPHA="${FORCE_ALPHA:--1.0}"
+BACKBONE="${BACKBONE:-}"
 
 if [ "${DATA}" = "/path/to/datasets" ]; then
   echo "Please set DATA to a real dataset root before evaluation." >&2
@@ -57,6 +58,10 @@ CMD=(
   --eval-only
   --model-dir "${MODEL_DIR}"
 )
+
+if [ -n "${BACKBONE}" ]; then
+  CMD+=(--backbone "${BACKBONE}")
+fi
 
 if [ -n "${LOAD_EPOCH}" ]; then
   CMD+=(--load-epoch "${LOAD_EPOCH}")
