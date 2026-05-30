@@ -15,7 +15,7 @@ from clip import clip
 from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
 from trainers.checkpoint_utils import load_checkpoint_compat
 from trainers.cocoop import TextEncoder, load_clip_to_cpu
-from trainers.cocoop_da_v0 import VisualEncoderAdapter
+from archive.v0_v1_ablation.trainers.cocoop_da_v0 import VisualEncoderAdapter
 
 _tokenizer = _Tokenizer()
 

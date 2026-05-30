@@ -10,18 +10,78 @@ from dassl.metrics import compute_accuracy
 from dassl.optim import build_lr_scheduler, build_optimizer
 from dassl.utils import count_num_param, load_pretrained_weights
 
-from models.shallow_adapt import (
+from archive.v0_v1_ablation.models.shallow_adapt import (
     DomainStatsBank,
-    FinalFeatureGate,
     ShallowAdaptation,
+    ShallowGate,
     compute_patch_stats,
+    softmax_entropy,
 )
 from trainers.checkpoint_utils import load_checkpoint_compat
 from trainers.cocoop import PromptLearner, TextEncoder, load_clip_to_cpu
-from trainers.cocoop_da_v0 import VisualEncoderAdapter
 
 
-class CustomCLIPDAV1(nn.Module):
+class VisualEncoderAdapter(nn.Module):
+    """Expose shallow-token forward helpers on CLIP ViT."""
+
+    def __init__(self, visual):
+        super().__init__()
+        if not hasattr(visual, "transformer") or not hasattr(
+            visual.transformer, "resblocks"
+        ):
+            raise TypeError("CoCoOpDAV0 currently supports CLIP ViT backbones only")
+
+        self.visual = visual
+        self.num_layers = len(self.visual.transformer.resblocks)
+        self.output_dim = self.visual.output_dim
+        self.hidden_dim = self.visual.conv1.out_channels
+        self.dtype = self.visual.conv1.weight.dtype
+
+    def patch_embed(self, image):
+        x = self.visual.conv1(image.type(self.dtype))
+        x = x.reshape(x.shape[0], x.shape[1], -1)
+        x = x.permute(0, 2, 1)
+        cls_token = self.visual.class_embedding.to(x.dtype)
+        cls_token = cls_token + torch.zeros(
+            x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device
+        )
+        x = torch.cat([cls_token, x], dim=1)
+        x = x + self.visual.positional_embedding.to(x.dtype)
+        x = self.visual.ln_pre(x)
+        return x
+
+    def tokens_forward(self, tokens, start_layer=1, end_layer=None):
+        if end_layer is None:
+            end_layer = self.num_layers
+
+        x = tokens.permute(1, 0, 2)
+        for layer_idx, block in enumerate(self.visual.transformer.resblocks, start=1):
+            if layer_idx < start_layer:
+                continue
+            if layer_idx > end_layer:
+                break
+            x = block(x)
+        return x.permute(1, 0, 2)
+
+    def forward_until(self, image, layer_idx):
+        tokens = self.patch_embed(image)
+        if layer_idx <= 0:
+            return tokens
+        return self.tokens_forward(tokens, start_layer=1, end_layer=layer_idx)
+
+    def forward_from(self, hidden_tokens, start_layer):
+        tokens = self.tokens_forward(hidden_tokens, start_layer=start_layer)
+        features = self.visual.ln_post(tokens[:, 0, :])
+        if self.visual.proj is not None:
+            features = features @ self.visual.proj
+        return features
+
+    def forward(self, image):
+        hidden = self.patch_embed(image)
+        return self.forward_from(hidden, start_layer=1)
+
+
+class CustomCLIPDA(nn.Module):
     def __init__(self, cfg, classnames, clip_model):
         super().__init__()
         self.prompt_learner = PromptLearner(cfg, classnames, clip_model)
@@ -33,22 +93,18 @@ class CustomCLIPDAV1(nn.Module):
 
         da_cfg = cfg.TRAINER.COCOOP_DA
         dim = self.visual_adapter.hidden_dim
-        feat_dim = self.visual_adapter.output_dim
-
         self.inject_layer = da_cfg.INJECT_LAYER
         self.adapt_mode = da_cfg.ADAPT_MODE
+        self.modify_cls = da_cfg.MODIFY_CLS
         self.eps = da_cfg.STATS.EPS
+        self.lambda_cons = da_cfg.LOSS.LAMBDA_CONS
+        self.lambda_ent = da_cfg.LOSS.LAMBDA_ENT
         self.use_adapted_target_eval = da_cfg.EVAL.USE_ADAPTED_TARGET
         self.debug_print_once = da_cfg.DEBUG.PRINT_ONCE
-        self.force_alpha = da_cfg.GATE.FORCE_ALPHA
         self._has_printed_debug = False
 
         self.shallow_adapt = ShallowAdaptation(dim)
-        self.final_gate = FinalFeatureGate(
-            feat_dim,
-            hidden_ratio=da_cfg.GATE.HIDDEN_RATIO,
-            init_bias=da_cfg.GATE.INIT_BIAS,
-        )
+        self.gate = ShallowGate(dim, init_bias=da_cfg.GATE.INIT_BIAS)
         self.source_stats_bank = DomainStatsBank(
             dim, momentum=da_cfg.STATS.MOMENTUM, eps=da_cfg.STATS.EPS
         )
@@ -57,9 +113,11 @@ class CustomCLIPDAV1(nn.Module):
         )
 
     def _split_hidden(self, hidden_tokens):
-        return hidden_tokens[:, :1, :], hidden_tokens[:, 1:, :]
+        cls_token = hidden_tokens[:, :1, :]
+        patch_tokens = hidden_tokens[:, 1:, :]
+        return cls_token, patch_tokens
 
-    def _adapt_patch_tokens(self, patch_tokens, ref_mu, ref_std):
+    def _fuse_tokens(self, patch_tokens, ref_mu, ref_std):
         ref_mu = ref_mu.to(device=patch_tokens.device, dtype=patch_tokens.dtype)
         ref_std = ref_std.to(device=patch_tokens.device, dtype=patch_tokens.dtype)
         mu, std = compute_patch_stats(patch_tokens, eps=self.eps)
@@ -67,30 +125,18 @@ class CustomCLIPDAV1(nn.Module):
         normalized = normalized.to(patch_tokens.dtype)
         adapted = self.shallow_adapt(normalized, ref_mu, ref_std)
         adapted = adapted.to(patch_tokens.dtype)
-        return adapted, mu, std
-
-    def _normalize_feature(self, feat):
-        return feat / feat.norm(dim=-1, keepdim=True)
-
-    def _compute_alpha(self, feat_adapted):
-        if self.force_alpha >= 0.0:
-            alpha = torch.full(
-                (feat_adapted.shape[0], 1),
-                float(self.force_alpha),
-                device=feat_adapted.device,
-                dtype=feat_adapted.dtype,
-            )
-            return alpha
-
-        alpha = self.final_gate(feat_adapted)
-        return alpha.to(dtype=feat_adapted.dtype)
-
-    def _compose_final_feature(self, feat_normal, feat_adapted):
-        alpha = self._compute_alpha(feat_adapted)
-        feat_final = (torch.ones_like(alpha) - alpha) * feat_normal + alpha * feat_adapted
-        return feat_final, alpha
+        alpha = self.gate(patch_tokens, adapted)
+        fused = (torch.ones_like(alpha) - alpha) * patch_tokens + alpha * adapted
+        return {
+            "mu": mu,
+            "std": std,
+            "adapted": adapted,
+            "alpha": alpha,
+            "fused": fused,
+        }
 
     def _encode_logits(self, image_features):
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         logit_scale = self.logit_scale.exp()
         prompts = self.prompt_learner(image_features)
 
@@ -101,9 +147,10 @@ class CustomCLIPDAV1(nn.Module):
             logits_i = logit_scale * image_feature_i @ text_features.t()
             logits.append(logits_i)
 
-        return torch.stack(logits)
+        logits = torch.stack(logits)
+        return logits, image_features
 
-    def _forward_source_features(self, image_s, image_t):
+    def _forward_source_path(self, image_s, image_t):
         hidden_s = self.visual_adapter.forward_until(image_s, self.inject_layer)
         hidden_t = self.visual_adapter.forward_until(image_t, self.inject_layer)
 
@@ -117,16 +164,12 @@ class CustomCLIPDAV1(nn.Module):
         self.target_stats_bank.update(mu_t.detach(), std_t.detach())
 
         target_mu, target_std = self.target_stats_bank.get()
-        patch_s_adapted, _, _ = self._adapt_patch_tokens(patch_s, target_mu, target_std)
-
-        hidden_s_adapted = torch.cat([cls_s, patch_s_adapted], dim=1).to(hidden_s.dtype)
-        feat_normal = self.visual_adapter.forward_from(
-            hidden_s, start_layer=self.inject_layer + 1
+        source_state = self._fuse_tokens(patch_s, target_mu, target_std)
+        hidden_s_fused = torch.cat([cls_s, source_state["fused"]], dim=1)
+        hidden_s_fused = hidden_s_fused.to(hidden_s.dtype)
+        feat_s_fused = self.visual_adapter.forward_from(
+            hidden_s_fused, start_layer=self.inject_layer + 1
         )
-        feat_adapted = self.visual_adapter.forward_from(
-            hidden_s_adapted, start_layer=self.inject_layer + 1
-        )
-        feat_final, alpha = self._compose_final_feature(feat_normal, feat_adapted)
 
         debug = {
             "hidden_s": hidden_s,
@@ -139,92 +182,125 @@ class CustomCLIPDAV1(nn.Module):
             "std_t": std_t,
             "target_mu_bank": target_mu,
             "target_std_bank": target_std,
-            "feat_normal": feat_normal,
-            "feat_adapted": feat_adapted,
-            "feat_final": feat_final,
-            "alpha": alpha,
+            "alpha_s": source_state["alpha"],
+            "hidden_s_fused": hidden_s_fused,
+            "feat_s_fused": feat_s_fused,
         }
-        return feat_normal, feat_adapted, feat_final, debug
 
-    def _forward_target_features(self, image):
-        hidden_t = self.visual_adapter.forward_until(image, self.inject_layer)
+        return feat_s_fused, hidden_s, hidden_t, debug
+
+    def _forward_target_path(self, hidden_t, use_adapt):
         cls_t, patch_t = self._split_hidden(hidden_t)
-        feat_normal = self.visual_adapter.forward_from(
-            hidden_t, start_layer=self.inject_layer + 1
-        )
 
-        if self.use_adapted_target_eval and bool(self.source_stats_bank.initialized.item()):
+        if use_adapt and bool(self.source_stats_bank.initialized.item()):
             source_mu, source_std = self.source_stats_bank.get()
-            patch_t_adapted, _, _ = self._adapt_patch_tokens(patch_t, source_mu, source_std)
-            hidden_t_adapted = torch.cat([cls_t, patch_t_adapted], dim=1).to(hidden_t.dtype)
-            feat_adapted = self.visual_adapter.forward_from(
-                hidden_t_adapted, start_layer=self.inject_layer + 1
-            )
-            feat_final, alpha = self._compose_final_feature(feat_normal, feat_adapted)
+            target_state = self._fuse_tokens(patch_t, source_mu, source_std)
+            patch_t_out = target_state["fused"]
+            alpha_t = target_state["alpha"]
         else:
-            feat_adapted = feat_normal
-            feat_final = feat_normal
-            alpha = self._compute_alpha(feat_adapted)
+            patch_t_out = patch_t
+            alpha_t = None
 
-        return feat_normal, feat_adapted, feat_final, alpha
+        hidden_t_out = torch.cat([cls_t, patch_t_out], dim=1)
+        hidden_t_out = hidden_t_out.to(hidden_t.dtype)
+        feat_t = self.visual_adapter.forward_from(
+            hidden_t_out, start_layer=self.inject_layer + 1
+        )
+        return feat_t, alpha_t
 
     def _log_debug_once(self, debug, logits_s, loss_src):
         if not self.debug_print_once or self._has_printed_debug:
             return
 
-        print("[CoCoOpDAV1 debug]")
+        print("[CoCoOpDAV0 debug]")
+        print("x_s shape:", tuple(debug["hidden_s"].shape))
+        print("x_t shape:", tuple(debug["hidden_t"].shape))
         print("h_s shape:", tuple(debug["hidden_s"].shape))
         print("h_t shape:", tuple(debug["hidden_t"].shape))
         print("p_s shape:", tuple(debug["patch_s"].shape))
         print("p_t shape:", tuple(debug["patch_t"].shape))
-        print("feat_normal shape:", tuple(debug["feat_normal"].shape))
-        print("feat_adapted shape:", tuple(debug["feat_adapted"].shape))
-        print("feat_final shape:", tuple(debug["feat_final"].shape))
-        print("alpha shape:", tuple(debug["alpha"].shape))
+        print("mu_s shape:", tuple(debug["mu_s"].shape))
+        print("std_s shape:", tuple(debug["std_s"].shape))
+        print("mu_t_bank shape:", tuple(debug["target_mu_bank"].shape))
+        print("std_t_bank shape:", tuple(debug["target_std_bank"].shape))
+        print("alpha_s shape:", tuple(debug["alpha_s"].shape))
+        print("h_s_fused shape:", tuple(debug["hidden_s_fused"].shape))
+        print("feat_s_fused shape:", tuple(debug["feat_s_fused"].shape))
         print("logits_s shape:", tuple(logits_s.shape))
         print("loss_src:", float(loss_src.detach().item()))
         self._has_printed_debug = True
 
     def forward_train(self, image_s, label_s, image_t):
-        feat_normal, feat_adapted, feat_final, debug = self._forward_source_features(
+        feat_s_fused, hidden_s, hidden_t, debug = self._forward_source_path(
             image_s, image_t
         )
+        logits_s_fused, _ = self._encode_logits(feat_s_fused)
 
-        feat_normal = self._normalize_feature(feat_normal)
-        feat_adapted = self._normalize_feature(feat_adapted)
-        feat_final = self._normalize_feature(feat_final)
+        with torch.no_grad():
+            feat_s_normal = self.visual_adapter.forward_from(
+                hidden_s, start_layer=self.inject_layer + 1
+            )
+            logits_s_normal, _ = self._encode_logits(feat_s_normal)
 
-        logits_s = self._encode_logits(feat_final)
-        loss_src = F.cross_entropy(logits_s, label_s)
+        target_use_adapt = self.adapt_mode == "bidirect"
+        feat_t, alpha_t = self._forward_target_path(hidden_t, use_adapt=target_use_adapt)
+        logits_t, _ = self._encode_logits(feat_t)
 
-        alpha = debug["alpha"]
-        self._log_debug_once(debug, logits_s, loss_src)
+        loss_src = F.cross_entropy(logits_s_fused, label_s)
+        loss_cons = F.kl_div(
+            F.log_softmax(logits_s_fused, dim=-1),
+            F.softmax(logits_s_normal.detach(), dim=-1),
+            reduction="batchmean",
+        )
+        loss_ent = softmax_entropy(logits_t).mean()
 
-        acc = compute_accuracy(logits_s, label_s)[0].item()
-        return {
-            "loss": loss_src,
+        loss = loss_src
+        if self.lambda_cons > 0:
+            loss = loss + self.lambda_cons * loss_cons
+        if self.lambda_ent > 0:
+            loss = loss + self.lambda_ent * loss_ent
+
+        alpha_s = debug["alpha_s"]
+        assert debug["hidden_s_fused"].shape == hidden_s.shape
+        assert torch.isfinite(debug["hidden_s_fused"]).all()
+        assert torch.isfinite(logits_s_fused).all()
+        assert alpha_s.min().item() >= 0 and alpha_s.max().item() <= 1
+
+        self._log_debug_once(debug, logits_s_fused, loss_src)
+
+        acc = compute_accuracy(logits_s_fused, label_s)[0].item()
+        output = {
+            "loss": loss,
             "loss_src": loss_src.detach(),
-            "acc_src": torch.tensor(acc, device=loss_src.device),
-            "alpha_mean": alpha.mean().detach(),
-            "alpha_std": alpha.std(unbiased=False).detach(),
-            "alpha_min": alpha.min().detach(),
-            "alpha_max": alpha.max().detach(),
+            "loss_cons": loss_cons.detach(),
+            "loss_ent": loss_ent.detach(),
+            "acc_src": torch.tensor(acc, device=loss.device),
+            "alpha_mean": alpha_s.mean().detach(),
+            "alpha_std": alpha_s.std(unbiased=False).detach(),
+            "alpha_min": alpha_s.min().detach(),
+            "alpha_max": alpha_s.max().detach(),
             "source_mu_norm": self.source_stats_bank.running_mu.norm().detach(),
             "source_std_mean": self.source_stats_bank.running_std.mean().detach(),
             "target_mu_norm": self.target_stats_bank.running_mu.norm().detach(),
             "target_std_mean": self.target_stats_bank.running_std.mean().detach(),
         }
 
+        if alpha_t is not None:
+            output["alpha_t_mean"] = alpha_t.mean().detach()
+
+        return output
+
     def forward_inference(self, image):
-        feat_normal, feat_adapted, feat_final, _ = self._forward_target_features(image)
-        feat_normal = self._normalize_feature(feat_normal)
-        feat_adapted = self._normalize_feature(feat_adapted)
-        feat_final = self._normalize_feature(feat_final)
-        return self._encode_logits(feat_final)
+        hidden = self.visual_adapter.forward_until(image, self.inject_layer)
+        feat, _ = self._forward_target_path(
+            hidden, use_adapt=self.use_adapted_target_eval
+        )
+        logits, _ = self._encode_logits(feat)
+        return logits
 
 
 @TRAINER_REGISTRY.register()
-class CoCoOpDAV1(TrainerXU):
+class CoCoOpDAV0(TrainerXU):
     def check_cfg(self, cfg):
         assert cfg.TRAINER.COCOOP.PREC in ["fp16", "fp32", "amp"]
         assert cfg.TRAINER.COCOOP_DA.ADAPT_MODE in ["s2t", "bidirect"]
@@ -239,8 +315,9 @@ class CoCoOpDAV1(TrainerXU):
         if cfg.TRAINER.COCOOP.PREC in ["fp32", "amp"]:
             clip_model.float()
 
-        print("Building CoCoOpDAV1")
-        self.model = CustomCLIPDAV1(cfg, classnames, clip_model)
+        print("Building CoCoOpDAV0")
+        self.model = CustomCLIPDA(cfg, classnames, clip_model)
+
         self._freeze_parameters()
 
         if cfg.MODEL.INIT_WEIGHTS:
@@ -250,13 +327,9 @@ class CoCoOpDAV1(TrainerXU):
         print(f"# params: {count_num_param(self.model):,}")
 
         param_groups = []
-        adaptation_params = [
-            p for p in self.model.shallow_adapt.parameters() if p.requires_grad
-        ]
-        gate_params = [p for p in self.model.final_gate.parameters() if p.requires_grad]
-        prompt_params = [
-            p for p in self.model.prompt_learner.parameters() if p.requires_grad
-        ]
+        adaptation_params = [p for p in self.model.shallow_adapt.parameters() if p.requires_grad]
+        gate_params = [p for p in self.model.gate.parameters() if p.requires_grad]
+        prompt_params = [p for p in self.model.prompt_learner.parameters() if p.requires_grad]
 
         if adaptation_params:
             param_groups.append({"params": adaptation_params})
@@ -272,14 +345,9 @@ class CoCoOpDAV1(TrainerXU):
 
         self.optim = build_optimizer(self.model, cfg.OPTIM, param_groups=param_groups)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
-        self.register_model("cocoop_da_v1", self.model, self.optim, self.sched)
+        self.register_model("cocoop_da_v0", self.model, self.optim, self.sched)
 
         self.scaler = GradScaler() if cfg.TRAINER.COCOOP.PREC == "amp" else None
-
-        device_count = torch.cuda.device_count()
-        if device_count > 1:
-            print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
-            self.model = nn.DataParallel(self.model)
 
     def _freeze_parameters(self):
         cfg = self.cfg
@@ -289,16 +357,14 @@ class CoCoOpDAV1(TrainerXU):
 
         for param in self.model.shallow_adapt.parameters():
             param.requires_grad_(True)
-        for param in self.model.final_gate.parameters():
+        for param in self.model.gate.parameters():
             param.requires_grad_(True)
 
         if cfg.TRAINER.COCOOP_DA.TRAIN.TRAIN_PROMPT_LEARNER:
             for param in self.model.prompt_learner.parameters():
                 param.requires_grad_(True)
 
-        enabled = sorted(
-            name for name, param in self.model.named_parameters() if param.requires_grad
-        )
+        enabled = sorted(name for name, param in self.model.named_parameters() if param.requires_grad)
         print("Parameters to be updated:")
         for name in enabled:
             print(f"  - {name}")

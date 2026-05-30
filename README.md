@@ -1,6 +1,8 @@
 # da_lab
 
-## 环境配置命令
+当前活跃分支方向是 `Office-Home` 的 source-available closed-set SS-MTDA。
+
+## 环境准备
 
 ```bash
 conda create -n coop-da python=3.10 -y
@@ -10,388 +12,125 @@ git clone https://github.com/Guldfisk5682/da_lab.git
 cd da_lab
 
 git clone https://github.com/KaiyangZhou/Dassl.pytorch.git ../Dassl.pytorch
-
 pip install -e ../Dassl.pytorch
 pip install -r requirements.txt
 ```
 
-说明：
+如果服务器还没有可用的 `ViT-B/16` CLIP 权重，可以继续沿用原始 CoOp/CoCoOp 的方式，在训练时通过 `MODEL.BACKBONE.NAME=ViT-B/16` 让代码按需加载。这个分支本地不会主动替你下载。
 
-- `requirements.txt` 已包含：
-  - `torch==2.6.0+cu124`
-  - `torchvision==0.21.0+cu124`
-  - `--extra-index-url https://download.pytorch.org/whl/cu124`
-- 因此远端服务器按上面顺序执行即可。
-- `Dassl.pytorch` 不是 `requirements.txt` 里的普通 pip 包，必须单独 clone 并 `pip install -e`。
+## 当前保留的主入口
 
-## Office-31 数据准备命令
+- `trainers/coop.py`
+- `trainers/cocoop.py`
+- `trainers/cocoop_mtda.py`
+- `trainers/style_prompt_mtda.py`
+- `datasets/office_home_mtda.py`
+- `configs/datasets/office_home_mtda.yaml`
+- `configs/trainers/CoCoOpMTDA/vit_b16.yaml`
+- `configs/trainers/StylePromptMTDA/vit_b16.yaml`
+- `scripts/style_prompt_mtda/run_officehome_one.sh`
+- `scripts/style_prompt_mtda/run_officehome_all.sh`
+- `scripts/style_prompt_mtda/collect_officehome_results.py`
 
-直接下载并整理到标准目录：
+## 归档说明
+
+旧的 `V0 / V1 / legacy-GSPA / Office-31 ablation` 已移动到：
+
+- `archive/v0_v1_ablation/`
+- `archive/legacy_gspa/`
+
+迁移细节见：
+
+- `docs/migration_to_style_prompt_mtda.md`
+
+## 轻量检查
+
+不要下载权重或数据集时，可以先做：
+
+```bash
+python train.py --help
+```
+
+## Office-Home 数据准备
+
+`Dassl` 文档给出的 `Office-Home` 官方页面是：
+
+```text
+http://hemanthdv.org/OfficeHome-Dataset/
+```
+
+本仓库现在提供：
+
+- `scripts/datasets/download_officehome.sh`
+- `scripts/datasets/verify_officehome_layout.sh`
+
+如果你已经手上有官方压缩包：
 
 ```bash
 export DATA_ROOT=/path/to/datasets
-bash scripts/datasets/download_office31.sh
+export OFFICEHOME_ARCHIVE=/path/to/OfficeHomeDataset_10072016.zip
+bash scripts/datasets/download_officehome.sh
+bash scripts/datasets/verify_officehome_layout.sh
 ```
 
-如果你已经手里有压缩包，也可以直接指定：
+如果你拿到了可直连的下载 URL：
 
 ```bash
 export DATA_ROOT=/path/to/datasets
-export OFFICE31_ARCHIVE=/path/to/domain_adaptation_images.tar.gz
-
-bash scripts/datasets/download_office31.sh
+export OFFICEHOME_URL="https://.../OfficeHomeDataset_10072016.zip"
+bash scripts/datasets/download_officehome.sh
+bash scripts/datasets/verify_officehome_layout.sh
 ```
 
-脚本完成后，应当得到：
+准备完成后，目录应为：
 
 ```text
-$DATA_ROOT/office31/amazon/<class_name>/*.jpg
-$DATA_ROOT/office31/dslr/<class_name>/*.jpg
-$DATA_ROOT/office31/webcam/<class_name>/*.jpg
+DATA_ROOT/
+└── office_home/
+    ├── art/
+    ├── clipart/
+    ├── product/
+    └── real_world/
 ```
 
-下载后建议立刻做一次结构校验：
+脚本会自动把官方常见原始结构里的 `Art/Clipart/Product/Real World/images/...` 整理成上面的 `office_home/...` 结构。
 
-```bash
-export DATA_ROOT=/path/to/datasets
-bash scripts/datasets/verify_office31_layout.sh
-```
+## Office-Home MTDA 训练入口
 
-## 云端完整流程
-
-### 1. 配环境
-
-```bash
-conda create -n coop-da python=3.10 -y
-conda activate coop-da
-
-git clone https://github.com/Guldfisk5682/da_lab.git
-cd da_lab
-
-git clone https://github.com/KaiyangZhou/Dassl.pytorch.git ../Dassl.pytorch
-
-pip install -e ../Dassl.pytorch
-pip install -r requirements.txt
-```
-
-### 2. 下载并校验 Office-31
-
-```bash
-export DATA_ROOT=/path/to/datasets
-bash scripts/datasets/download_office31.sh
-bash scripts/datasets/verify_office31_layout.sh
-```
-
-### 3. 启动训练
+单个 source：
 
 ```bash
 export DATA=/path/to/datasets
-export SOURCE_DOMAIN=amazon
-export TARGET_DOMAIN=webcam
-export SEED=1
-export STAGE=1
-
-bash scripts/cocoop_da/office31_train.sh
+bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 cocoop_mt
+bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt
 ```
 
-### 4. 启动评测
+最小 smoke test：
 
 ```bash
 export DATA=/path/to/datasets
-export SOURCE_DOMAIN=amazon
-export TARGET_DOMAIN=webcam
-export SEED=1
-export STAGE=1
-export MODEL_DIR=output/office31/CoCoOpDAV1/A2W/seed1/stage1
-
-bash scripts/cocoop_da/office31_eval.sh
+bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 cocoop_mt --debug
+bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt --debug
 ```
 
-## 训练命令
-
-### Stage 1
-
-只训练浅层适配模块和 gate：
+四个 source 全部运行：
 
 ```bash
 export DATA=/path/to/datasets
-export SOURCE_DOMAIN=amazon
-export TARGET_DOMAIN=webcam
-export SEED=1
-export STAGE=1
-
-bash scripts/cocoop_da/office31_train.sh
+bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_mt
+bash scripts/style_prompt_mtda/run_officehome_all.sh style_prompt
 ```
 
-### Stage 2
-
-训练浅层适配模块、gate、CoCoOp prompt learner：
+结果汇总：
 
 ```bash
-export DATA=/path/to/datasets
-export SOURCE_DOMAIN=amazon
-export TARGET_DOMAIN=webcam
-export SEED=1
-export STAGE=2
-
-bash scripts/cocoop_da/office31_train.sh
+python scripts/style_prompt_mtda/collect_officehome_results.py
 ```
 
-### 一键跑完 Office-31 六个任务
+`OfficeHomeMTDA` 不会物理重写数据集文件，而是在运行时自动组织成：
 
-该脚本会依次训练六个任务，并在每个任务训练结束后自动调用 `office31_eval.sh` 做评测。
-全部任务结束后，还会自动生成一个 markdown 汇总文件，默认保存到 `results/office31/CoCoOpDAV1/seed1_stage1_summary.md`；如果你切了 `TRAINER_DIR`、`SEED` 或 `STAGE`，文件名也会跟着变化。
+- `1` 个 labeled source loader
+- `3` 个 unlabeled target loaders
+- `3` 个 target test loaders
 
-```bash
-export DATA=/path/to/datasets
-export SEED=1
-export STAGE=1
-
-bash scripts/cocoop_da/office31_train_all.sh
-```
-
-## Legacy-GSPA
-
-`Legacy-GSPA` 是当前用于复刻旧版 `gspa.py` 思路的干净实现。它和 `V0/V1` 的关键区别是：
-
-- 训练时使用 `source batch + target batch` 做 cross-style hidden-state augmentation
-- 测试时只走普通单图 CoCoOp/CLIP 推理
-- 测试时不使用 target batch，不做 style swap，不做 gate 融合
-
-### Legacy-GSPA 单任务训练
-
-```bash
-export DATA=/path/to/datasets
-export DATASET_CONFIG=configs/datasets/office31.yaml
-export SOURCE_DOMAIN=amazon
-export TARGET_DOMAIN=webcam
-export SEED=1
-
-bash scripts/gspa_legacy/office31_train.sh
-```
-
-### Legacy-GSPA 单任务评测
-
-```bash
-export DATA=/path/to/datasets
-export DATASET_CONFIG=configs/datasets/office31.yaml
-export SOURCE_DOMAIN=amazon
-export TARGET_DOMAIN=webcam
-export SEED=1
-export MODEL_DIR=output/office31/GSPALegacy/A2W/seed1
-
-bash scripts/gspa_legacy/office31_eval.sh
-```
-
-### Legacy-GSPA 六任务批量训练
-
-```bash
-export DATA=/path/to/datasets
-export DATASET_CONFIG=configs/datasets/office31.yaml
-export SEED=1
-
-bash scripts/gspa_legacy/office31_train_all.sh
-```
-
-批量脚本结束后会生成：
-
-```text
-results/office31/GSPALegacy/seed1_summary.md
-```
-
-如果你要用本地 checkpoint 路径而不是 `ViT-B/16` 名称，也可以直接覆盖：
-
-```bash
-export BACKBONE=/path/to/clip_checkpoint.pt
-```
-
-### Legacy-GSPA Ablation
-
-当前 ablation 入口支持以下实验组：
-
-- `B0`: CoCoOp baseline
-- `B1`: CoCoOp + last3 tuning
-- `L0`: full legacy
-- `L1`: fixed gate
-- `L2`: normal-only
-- `L3`: last3 frozen
-- `L4`: identity-style
-- `L5`: patch-only statistics
-
-其中 `B1` 通过 `GSPALegacy` 的等价配置实现：
-
-- `STYLE_MODE=none`
-- `GATE_MODE=normal_only`
-- `TRAIN_VISION_LAST3=true`
-
-先生成配置：
-
-```bash
-python scripts/gspa_legacy_ablation/make_ablation_configs.py
-```
-
-单任务运行示例：
-
-```bash
-export DATA=/path/to/datasets
-export DATASET_CONFIG=configs/datasets/office31.yaml
-
-bash scripts/gspa_legacy_ablation/run_one.sh L0 A W 1
-```
-
-批量运行默认会执行 `L0-L5` 六组：
-
-```bash
-export DATA=/path/to/datasets
-export DATASET_CONFIG=configs/datasets/office31.yaml
-
-bash scripts/gspa_legacy_ablation/run_office31_ablation.sh
-```
-
-如果要单独补跑 baseline：
-
-```bash
-export DATA=/path/to/datasets
-export DATASET_CONFIG=configs/datasets/office31.yaml
-
-bash scripts/gspa_legacy_ablation/run_office31_ablation.sh B0
-bash scripts/gspa_legacy_ablation/run_office31_ablation.sh B1
-```
-
-收集结果：
-
-```bash
-python scripts/gspa_legacy_ablation/collect_results.py
-```
-
-### 可用超参数
-
-脚本直接使用的环境变量：
-
-- `DATA`: 数据集根目录，例如 `/data/datasets`
-- `SOURCE_DOMAIN`: 源域，可选 `amazon` / `dslr` / `webcam`
-- `TARGET_DOMAIN`: 目标域，可选 `amazon` / `dslr` / `webcam`
-- `SEED`: 随机种子
-- `STAGE`: `1` 或 `2`
-- `OUTPUT_DIR`: 可选，自定义输出目录
-- `TRAINER`: 训练器名称（默认 `CoCoOpDAV1`）
-- `TRAINER_DIR`: 可选，输出目录标签；默认跟随 `TRAINER`
-- `CFG`: 训练配置文件（默认 `configs/trainers/CoCoOpDA/vit_b16_v1.yaml`）
-- `DATASET_CONFIG`: 数据集配置（默认 `configs/datasets/office31.yaml`）
-
-如果要覆盖配置文件中的训练超参数，可以直接这样传：
-
-```bash
-python train.py \
-  --root "${DATA}" \
-  --seed "${SEED}" \
-  --trainer CoCoOpDAV1 \
-  --dataset-config-file configs/datasets/office31.yaml \
-  --config-file configs/trainers/CoCoOpDA/vit_b16_v1.yaml \
-  --source-domains "${SOURCE_DOMAIN}" \
-  --target-domains "${TARGET_DOMAIN}" \
-  -- \
-  TRAINER.COCOOP.N_CTX 4 \
-  OPTIM.LR 0.002 \
-  OPTIM.MAX_EPOCH 10
-```
-
-当前主配置文件：
-
-```text
-configs/trainers/CoCoOpDA/vit_b16_v1.yaml
-```
-
-默认数据集配置：
-
-```text
-configs/datasets/office31.yaml
-```
-
-如果你的 Office-31 目录是下面这种结构：
-
-```text
-$DATA/office31/amazon/images/<class_name>/*.jpg
-```
-
-则把数据集配置切换为：
-
-```text
-configs/datasets/office31_flex.yaml
-```
-
-当前关键默认值：
-
-- `TRAINER.COCOOP.N_CTX = 4`
-- `TRAINER.COCOOP.CTX_INIT = "a photo of a"`
-- `OPTIM.LR = 0.002`
-- `OPTIM.MAX_EPOCH = 10`
-- `TRAINER.COCOOP_DA.INJECT_LAYER = 3`
-- `TRAINER.COCOOP_DA.ADAPT_MODE = "s2t"`
-- `TRAINER.COCOOP_DA.GATE.FORCE_ALPHA = -1.0` 表示 learned alpha
-- `TRAINER.COCOOP_DA.GATE.FORCE_ALPHA = 0.0` 表示只用 normal feature
-- `TRAINER.COCOOP_DA.GATE.FORCE_ALPHA = 1.0` 表示只用 adapted feature
-
-V1 ablation 例子：
-
-```bash
-export DATA=/path/to/datasets
-export SEED=1
-export STAGE=1
-export FORCE_ALPHA=0.0
-bash scripts/cocoop_da/office31_train_all.sh
-```
-
-```bash
-export DATA=/path/to/datasets
-export SEED=1
-export STAGE=1
-export FORCE_ALPHA=1.0
-bash scripts/cocoop_da/office31_train_all.sh
-```
-
-## 评测命令
-
-```bash
-export DATA=/path/to/datasets
-export SOURCE_DOMAIN=amazon
-export TARGET_DOMAIN=webcam
-export SEED=1
-export STAGE=1
-export MODEL_DIR=output/office31/CoCoOpDAV1/A2W/seed1/stage1
-
-bash scripts/cocoop_da/office31_eval.sh
-```
-
-### 评测可用超参数
-
-- `DATA`: 数据集根目录
-- `SOURCE_DOMAIN`: 源域
-- `TARGET_DOMAIN`: 目标域
-- `SEED`: 随机种子
-- `STAGE`: `1` 或 `2`
-- `MODEL_DIR`: 待评测 checkpoint 目录
-- `LOAD_EPOCH`: 可选，指定加载某个 epoch；不填则默认读 best/last 逻辑
-- `TRAINER_DIR`: 可选，若不手动设置 `MODEL_DIR`，则用于拼默认 checkpoint 路径
-
-补充：
-
-- 如果 `MODEL_DIR` 下存在 `model-best.pth.tar`，评测脚本优先加载它
-- 如果不存在 `model-best.pth.tar`，评测脚本会自动回退到该目录下最新的 `model.pth.tar-*`
-
-如果你要直接跑六个 Office-31 任务，只需要替换：
-
-- `SOURCE_DOMAIN`
-- `TARGET_DOMAIN`
-- `STAGE`
-- `SEED`
-- `DATASET_CONFIG`，仅当你需要切到 `office31_flex.yaml`
-
-常用任务映射：
-
-- `amazon -> webcam`: `SOURCE_DOMAIN=amazon`, `TARGET_DOMAIN=webcam`
-- `amazon -> dslr`: `SOURCE_DOMAIN=amazon`, `TARGET_DOMAIN=dslr`
-- `webcam -> amazon`: `SOURCE_DOMAIN=webcam`, `TARGET_DOMAIN=amazon`
-- `webcam -> dslr`: `SOURCE_DOMAIN=webcam`, `TARGET_DOMAIN=dslr`
-- `dslr -> amazon`: `SOURCE_DOMAIN=dslr`, `TARGET_DOMAIN=amazon`
-- `dslr -> webcam`: `SOURCE_DOMAIN=dslr`, `TARGET_DOMAIN=webcam`
+也就是说，SS-MTDA protocol 是由 dataset wrapper 和 trainer 在运行时完成的，不需要你手工重新打包数据。

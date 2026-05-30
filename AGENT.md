@@ -1,5 +1,37 @@
 # AGENT.md
 
+## Active Branch Status
+
+当前活跃研究分支已切换为：
+
+```text
+ss-mtda-style-prompt
+```
+
+当前主线目标不再是 `Office-31 / V0 / V1 / legacy-GSPA`。这些路线仅作为历史参考保留在：
+
+- `archive/v0_v1_ablation/`
+- `archive/legacy_gspa/`
+
+当前默认研究目标是：
+
+```text
+Dataset: Office-Home
+Protocol: source-available closed-set SS-MTDA
+Backbone: CLIP ViT-B/16
+Base method: CoCoOp / CoCoOpMTDA
+New method: StylePromptMTDA
+Core idea: target-style prompt modulation inside the prompt learner
+```
+
+新方向要求：
+
+1. 不下载真实数据集或模型权重，除非用户明确要求并且在远程服务器执行。
+2. 不再把 hidden-state style swap / gate / last3 tuning 作为默认方法。
+3. 保持原始 `CoOp / CoCoOp` trainer 可用。
+4. 新增实验优先围绕 `OfficeHomeMTDA -> CoCoOpMTDA -> StylePromptMTDA` 这条主路径展开。
+5. 本地只做 `train.py --help`、synthetic smoke test、脚本与日志结构验证。
+
 ## Project Mission
 
 This repository is for a fast, reproducible prototype of a CoCoOp-based unsupervised domain adaptation method.
@@ -59,6 +91,18 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 ---
 
 ## Work Log
+
+- 2026-05-30: Created the clean research branch `ss-mtda-style-prompt` and switched the active path away from `Office-31 / V0 / V1 / legacy-GSPA`.
+- 2026-05-30: Archived the old experimental routes into `archive/v0_v1_ablation/` and `archive/legacy_gspa/`, keeping the original `CoOp / CoCoOp` baseline trainers active in the main tree.
+- 2026-05-30: Added `OfficeHomeMTDA` for source-available closed-set single-source multi-target adaptation, with one labeled source domain and three unlabeled target domains per run.
+- 2026-05-30: Added `MultiTargetTrainerXU` and `MultiTargetDataManager` so training can consume `batch_x + batch_u_dict` and evaluation can report per-target accuracy, per-source macro average, and overall average.
+- 2026-05-30: Added `CoCoOpMTDA` as the clean baseline. It reuses the original CoCoOp prompt learner, trains only on source CE, and uses target batches only to validate the multi-target dataflow.
+- 2026-05-30: Added `StylePromptMTDA` v0. It keeps CLIP frozen, extracts shallow patch-token style statistics at visual block 3, maintains one queue per target domain, performs domainwise top-1 queue selection, computes a style gap, and injects the resulting `pi_style` into the prompt learner via `ctx + pi_img + beta * pi_style`.
+- 2026-05-30: Added `models/clip_vit.py` and `models/style_prompt.py` to hold reusable CLIP ViT shallow-token helpers, style extraction, target-style queues, and the style MLP.
+- 2026-05-30: Added `scripts/style_prompt_mtda/run_officehome_one.sh`, `run_officehome_all.sh`, and `collect_officehome_results.py` as the new experiment entrypoints.
+- 2026-05-30: Added `scripts/datasets/download_officehome.sh` and `verify_officehome_layout.sh`. The downloader now normalizes the common official Office-Home archive layout into `DATA/office_home/{art,clipart,product,real_world}/...`.
+- 2026-05-30: Wrote `docs/migration_to_style_prompt_mtda.md` to document archived files, retained infrastructure, new entrypoints, and smoke-test commands.
+- 2026-05-30: Verified `python train.py --help` under `dlenv` and completed local synthetic smoke tests for both `CoCoOpMTDA` and `StylePromptMTDA` using a tiny fake `office_home/` tree and a local random ViT-B/16 checkpoint, without downloading any real data or weights.
 
 - 2026-05-19: Found and fixed the Office-31 domain parsing issue caused by `argparse.REMAINDER` swallowing `TRAINER.COCOOP_DA.TRAIN.STAGE`; added `--` before config overrides in the train scripts.
 - 2026-05-19: Added an OfficeHome dataset config and a dedicated OfficeHome training script for CoCoOpDAV0.
