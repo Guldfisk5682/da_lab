@@ -79,13 +79,51 @@ bash scripts/datasets/verify_officehome_layout.sh
 /workspace/txc/da_lab/data
 ```
 
-如果你什么都不传，脚本会默认尝试使用 Office-Home 官方页面中的 Google Drive 下载入口。
+如果你什么都不传，脚本会按这个顺序尝试：
+
+1. Office-Home 官方页面中的 Google Drive 下载入口
+2. Hugging Face 备选源 `flwrlabs/office-home`
+
+HF fallback 默认使用：
+
+```text
+HF_ENDPOINT=https://hf-mirror.com
+HF_DATASET_REPO=flwrlabs/office-home
+HF_DATASET_SPLIT=train
+```
+
+之所以选 `flwrlabs/office-home`，是因为它的数据卡明确给出了：
+
+- `Formats: parquet`
+- 共有 `image / domain / label` 三列
+- `train` split 共 `15.6k` 行
+
+这正好适合我们在下载脚本里重建为：
+
+```text
+office_home/
+├── art/
+├── clipart/
+├── product/
+└── real_world/
+```
 
 如果你想手工覆盖下载 URL：
 
 ```bash
 export DATA_ROOT=/workspace/txc/da_lab/data
 export OFFICEHOME_URL="https://.../OfficeHomeDataset_10072016.zip"
+bash scripts/datasets/download_officehome.sh
+bash scripts/datasets/verify_officehome_layout.sh
+```
+
+如果你想强制直接走 HF mirror：
+
+```bash
+export DATA_ROOT=/workspace/txc/da_lab/data
+export OFFICEHOME_SOURCE=hf
+export HF_ENDPOINT=https://hf-mirror.com
+export HF_DATASET_REPO=flwrlabs/office-home
 bash scripts/datasets/download_officehome.sh
 bash scripts/datasets/verify_officehome_layout.sh
 ```
