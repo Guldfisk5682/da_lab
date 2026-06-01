@@ -2,7 +2,15 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/../.."
+DEFAULT_REPO_ROOT="/workspace/txc/da_lab"
+AUTO_REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+if [ -d "${DEFAULT_REPO_ROOT}" ]; then
+  REPO_ROOT="${REPO_ROOT:-${DEFAULT_REPO_ROOT}}"
+else
+  REPO_ROOT="${REPO_ROOT:-${AUTO_REPO_ROOT}}"
+fi
+
+cd "${REPO_ROOT}"
 
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
   echo "Usage: bash scripts/style_prompt_mtda/run_officehome_one.sh <A|C|P|R> <SEED> <cocoop_mt|style_prompt> [--debug]" >&2
@@ -14,15 +22,10 @@ SEED="$2"
 METHOD="$3"
 DEBUG_FLAG="${4:-}"
 
-DATA="${DATA:-/path/to/datasets}"
-DATASET_CONFIG="${DATASET_CONFIG:-configs/datasets/office_home_mtda.yaml}"
+DATA="${DATA:-${REPO_ROOT}/data}"
+DATASET_CONFIG="${DATASET_CONFIG:-${REPO_ROOT}/configs/datasets/office_home_mtda.yaml}"
 BACKBONE="${BACKBONE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
-
-if [ "${DATA}" = "/path/to/datasets" ]; then
-  echo "Please set DATA to a real dataset root before running Office-Home MTDA." >&2
-  exit 2
-fi
 
 resolve_source_domain() {
   case "$1" in
@@ -62,13 +65,13 @@ case "${METHOD}" in
   cocoop_mt|cocoop)
     TRAINER="CoCoOpMTDA"
     TRAINER_DIR="cocoop_mt"
-    CFG="configs/trainers/CoCoOpMTDA/vit_b16.yaml"
+    CFG="${REPO_ROOT}/configs/trainers/CoCoOpMTDA/vit_b16.yaml"
     DEBUG_OPT_KEY="TRAINER.COCOOP_MTDA.DEBUG.PRINT_ONCE"
     ;;
   style_prompt|style_prompt_mtda)
     TRAINER="StylePromptMTDA"
     TRAINER_DIR="style_prompt"
-    CFG="configs/trainers/StylePromptMTDA/vit_b16.yaml"
+    CFG="${REPO_ROOT}/configs/trainers/StylePromptMTDA/vit_b16.yaml"
     DEBUG_OPT_KEY="TRAINER.STYLE_PROMPT_MTDA.DEBUG.PRINT_ONCE"
     ;;
   *)
@@ -78,10 +81,10 @@ case "${METHOD}" in
 esac
 
 TASK_TAG="${SOURCE_CODE}2${TARGET_CODES[0]}${TARGET_CODES[1]}${TARGET_CODES[2]}"
-OUTPUT_DIR="${OUTPUT_DIR:-output/office_home_mtda/${TRAINER_DIR}/${TASK_TAG}/seed${SEED}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/output/office_home_mtda/${TRAINER_DIR}/${TASK_TAG}/seed${SEED}}"
 
 CMD=(
-  python train.py
+  python "${REPO_ROOT}/train.py"
   --root "${DATA}"
   --seed "${SEED}"
   --trainer "${TRAINER}"

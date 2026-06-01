@@ -2,7 +2,10 @@
 
 set -euo pipefail
 
-DATA_ROOT="${DATA_ROOT:-/path/to/datasets}"
+DEFAULT_DATA_ROOT="/workspace/txc/da_lab/data"
+OFFICEHOME_GDRIVE_URL_DEFAULT="https://drive.google.com/file/d/0B81rNlvomiwed0V1YUxQdC1uOTg/view?resourcekey=0-2SNWq0CDAuWOBRRBL7ZZsw&usp=sharing"
+
+DATA_ROOT="${DATA_ROOT:-${DEFAULT_DATA_ROOT}}"
 OFFICEHOME_ARCHIVE="${OFFICEHOME_ARCHIVE:-}"
 OFFICEHOME_URL="${OFFICEHOME_URL:-}"
 OFFICEHOME_ARCHIVE_NAME="${OFFICEHOME_ARCHIVE_NAME:-OfficeHomeDataset_10072016.zip}"
@@ -39,11 +42,6 @@ find_domain_dir() {
   done
 }
 
-if [ "${DATA_ROOT}" = "/path/to/datasets" ]; then
-  echo "Please set DATA_ROOT to a real dataset root before downloading Office-Home." >&2
-  exit 1
-fi
-
 mkdir -p "${TARGET_DIR}" "${DOWNLOAD_DIR}"
 
 if [ -d "${TARGET_DIR}/art" ] && [ -d "${TARGET_DIR}/clipart" ] && [ -d "${TARGET_DIR}/product" ] && [ -d "${TARGET_DIR}/real_world" ]; then
@@ -62,31 +60,48 @@ else
   ARCHIVE_PATH="${DOWNLOAD_DIR}/${OFFICEHOME_ARCHIVE_NAME}"
   if [ ! -f "${ARCHIVE_PATH}" ]; then
     if [ -z "${OFFICEHOME_URL}" ]; then
-      cat <<EOF >&2
-Office-Home download information
+      OFFICEHOME_URL="${OFFICEHOME_GDRIVE_URL_DEFAULT}"
+      cat <<EOF
+Office-Home download source
 
-Dassl documents the official Office-Home page here:
+Official page:
   http://hemanthdv.org/OfficeHome-Dataset/
 
-This repository does not hardcode a direct archive URL because mirrors can change.
-Please either:
+Default archive source for this script:
+  ${OFFICEHOME_URL}
 
-1. provide a local archive:
+You can override it with either:
+
+1. a local archive:
    OFFICEHOME_ARCHIVE=/path/to/${OFFICEHOME_ARCHIVE_NAME} DATA_ROOT=${DATA_ROOT} $0
 
-2. or provide a direct download URL:
+2. another direct URL:
    OFFICEHOME_URL=https://.../${OFFICEHOME_ARCHIVE_NAME} DATA_ROOT=${DATA_ROOT} $0
 EOF
-      exit 2
     fi
 
-    if command -v curl >/dev/null 2>&1; then
+    if python -m gdown --help >/dev/null 2>&1; then
+      if python -m gdown --help 2>&1 | grep -q -- "--fuzzy"; then
+        python -m gdown --fuzzy "${OFFICEHOME_URL}" -O "${ARCHIVE_PATH}"
+      else
+        python -m gdown "${OFFICEHOME_URL}" -O "${ARCHIVE_PATH}"
+      fi
+    elif command -v curl >/dev/null 2>&1 && [[ "${OFFICEHOME_URL}" =~ ^https?:// ]]; then
       curl -L "${OFFICEHOME_URL}" -o "${ARCHIVE_PATH}"
-    elif command -v wget >/dev/null 2>&1; then
+    elif command -v wget >/dev/null 2>&1 && [[ "${OFFICEHOME_URL}" =~ ^https?:// ]]; then
       wget -O "${ARCHIVE_PATH}" "${OFFICEHOME_URL}"
     else
-      echo "Neither curl nor wget is available to download Office-Home." >&2
-      exit 3
+      cat <<EOF >&2
+Could not download Office-Home automatically.
+
+Tried source:
+  ${OFFICEHOME_URL}
+
+Please either:
+1. install gdown in the active environment, or
+2. pass OFFICEHOME_ARCHIVE=/path/to/${OFFICEHOME_ARCHIVE_NAME}
+EOF
+      exit 2
     fi
   fi
 fi

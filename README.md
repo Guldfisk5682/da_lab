@@ -67,16 +67,24 @@ http://hemanthdv.org/OfficeHome-Dataset/
 如果你已经手上有官方压缩包：
 
 ```bash
-export DATA_ROOT=/path/to/datasets
+export DATA_ROOT=/workspace/txc/da_lab/data
 export OFFICEHOME_ARCHIVE=/path/to/OfficeHomeDataset_10072016.zip
 bash scripts/datasets/download_officehome.sh
 bash scripts/datasets/verify_officehome_layout.sh
 ```
 
-如果你拿到了可直连的下载 URL：
+脚本默认数据根目录现在就是：
+
+```text
+/workspace/txc/da_lab/data
+```
+
+如果你什么都不传，脚本会默认尝试使用 Office-Home 官方页面中的 Google Drive 下载入口。
+
+如果你想手工覆盖下载 URL：
 
 ```bash
-export DATA_ROOT=/path/to/datasets
+export DATA_ROOT=/workspace/txc/da_lab/data
 export OFFICEHOME_URL="https://.../OfficeHomeDataset_10072016.zip"
 bash scripts/datasets/download_officehome.sh
 bash scripts/datasets/verify_officehome_layout.sh
@@ -100,7 +108,6 @@ DATA_ROOT/
 单个 source：
 
 ```bash
-export DATA=/path/to/datasets
 bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 cocoop_mt
 bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt
 ```
@@ -108,7 +115,6 @@ bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt
 最小 smoke test：
 
 ```bash
-export DATA=/path/to/datasets
 bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 cocoop_mt --debug
 bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt --debug
 ```
@@ -116,7 +122,6 @@ bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt --debug
 四个 source 全部运行：
 
 ```bash
-export DATA=/path/to/datasets
 bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_mt
 bash scripts/style_prompt_mtda/run_officehome_all.sh style_prompt
 ```

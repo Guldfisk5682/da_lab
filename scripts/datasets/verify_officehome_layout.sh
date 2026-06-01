@@ -2,14 +2,10 @@
 
 set -euo pipefail
 
-DATA_ROOT="${DATA_ROOT:-/path/to/datasets}"
+DEFAULT_DATA_ROOT="/workspace/txc/da_lab/data"
+DATA_ROOT="${DATA_ROOT:-${DEFAULT_DATA_ROOT}}"
 TARGET_DIR="${DATA_ROOT%/}/office_home"
 DOMAINS=(art clipart product real_world)
-
-if [ "${DATA_ROOT}" = "/path/to/datasets" ]; then
-  echo "Please set DATA_ROOT to a real dataset root before verifying Office-Home." >&2
-  exit 1
-fi
 
 if [ ! -d "${TARGET_DIR}" ]; then
   echo "Office-Home directory not found: ${TARGET_DIR}" >&2
