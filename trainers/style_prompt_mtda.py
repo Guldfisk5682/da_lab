@@ -12,7 +12,7 @@ from dassl.optim import build_lr_scheduler, build_optimizer
 from dassl.utils import count_num_param, load_pretrained_weights
 
 from models.clip_vit import VisualEncoderAdapter, compute_patch_style, patch_tokens
-from models.style_prompt import StyleMLP, TargetStyleQueues
+from models.style_prompt import DomainStyleMLP
 from trainers.checkpoint_utils import load_checkpoint_compat
 from trainers.cocoop import PromptLearner, TextEncoder, load_clip_to_cpu
 from trainers.mtda_base import MultiTargetTrainerXU
@@ -23,11 +23,13 @@ class StylePromptLearner(PromptLearner):
         super().__init__(cfg, classnames, clip_model)
         style_cfg = cfg.TRAINER.STYLE_PROMPT
         ctx_dim = self.ctx.shape[-1]
-        hidden_dim = int(style_cfg.STYLE_MLP_HIDDEN)
+        hidden_dim = int(style_cfg.DOMAIN_STYLE_MLP_HIDDEN)
+        if hidden_dim <= 0:
+            hidden_dim = int(style_cfg.STYLE_MLP_HIDDEN)
         if hidden_dim <= 0:
             hidden_dim = max(ctx_dim // 4, 1)
 
-        self.style_mlp = StyleMLP(
+        self.domain_style_mlp = DomainStyleMLP(
             input_dim=style_dim,
             hidden_dim=hidden_dim,
             output_dim=ctx_dim,
@@ -40,22 +42,39 @@ class StylePromptLearner(PromptLearner):
         else:
             self.register_buffer("beta", beta_tensor)
 
-    def forward(self, im_features, style_gap=None):
+    def compute_pi_img(self, im_features):
+        return self.meta_net(im_features)
+
+    def compute_pi_domain(self, domain_style):
+        squeeze = False
+        if domain_style.dim() == 1:
+            domain_style = domain_style.unsqueeze(0)
+            squeeze = True
+
+        pi_domain = self.domain_style_mlp(domain_style.to(self.ctx.dtype))
+        if squeeze:
+            pi_domain = pi_domain[0]
+        return pi_domain
+
+    def build_prompts(self, pi_img, pi_domain=None):
         prefix = self.token_prefix
         suffix = self.token_suffix
         ctx = self.ctx
 
-        pi_img = self.meta_net(im_features)
-        if style_gap is None:
-            pi_style = torch.zeros_like(pi_img)
+        if pi_domain is None:
+            pi_domain_batch = torch.zeros_like(pi_img)
+        elif pi_domain.dim() == 1:
+            pi_domain_batch = pi_domain.unsqueeze(0).expand(pi_img.shape[0], -1)
         else:
-            pi_style = self.style_mlp(style_gap.to(pi_img.dtype))
+            pi_domain_batch = pi_domain
 
+        pi_domain_batch = pi_domain_batch.to(pi_img.dtype)
         beta = self.beta.to(pi_img.dtype)
+
         ctx_shifted = (
             ctx.unsqueeze(0)
             + pi_img.unsqueeze(1)
-            + beta * pi_style.unsqueeze(1)
+            + beta * pi_domain_batch.unsqueeze(1)
         )
 
         prompts = []
@@ -65,7 +84,11 @@ class StylePromptLearner(PromptLearner):
             prompts.append(prompts_i)
         prompts = torch.stack(prompts)
 
-        return prompts, {"pi_img": pi_img, "pi_style": pi_style, "beta": beta}
+        return prompts, {"pi_img": pi_img, "pi_domain": pi_domain_batch, "beta": beta}
+
+    def forward(self, im_features, pi_domain=None):
+        pi_img = self.compute_pi_img(im_features)
+        return self.build_prompts(pi_img, pi_domain=pi_domain)
 
 
 class CustomCLIPStylePromptMTDA(nn.Module):
@@ -76,10 +99,10 @@ class CustomCLIPStylePromptMTDA(nn.Module):
         self.token_scope = cfg.TRAINER.STYLE_PROMPT.TOKEN_SCOPE
         self.style_layer = cfg.TRAINER.STYLE_PROMPT.STYLE_LAYER
         self.style_eps = cfg.TRAINER.STYLE_PROMPT.EPS
+        self.lambda_ent = float(cfg.TRAINER.STYLE_PROMPT.LAMBDA_ENT)
         self.target_domains = list(cfg.DATASET.TARGET_DOMAINS)
         self.debug_print_once = cfg.TRAINER.STYLE_PROMPT_MTDA.DEBUG.PRINT_ONCE
         self._has_printed_debug = False
-        self._latest_selection_distribution = OrderedDict()
 
         self.image_encoder = clip_model.visual
         self.visual_adapter = VisualEncoderAdapter(clip_model.visual)
@@ -92,51 +115,24 @@ class CustomCLIPStylePromptMTDA(nn.Module):
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
-        self.style_queues = TargetStyleQueues(
-            self.target_domains,
-            style_dim=self.visual_adapter.hidden_dim * 2,
-            queue_size=cfg.TRAINER.STYLE_PROMPT.STYLE_QUEUE_SIZE,
-        )
 
     def _extract_style(self, image):
         hidden = self.visual_adapter.forward_until(image, self.style_layer)
         if self.token_scope != "patch":
             raise ValueError(f"Unsupported TOKEN_SCOPE={self.token_scope}")
-        style = compute_patch_style(patch_tokens(hidden), eps=self.style_eps)
-        return style
+        return compute_patch_style(patch_tokens(hidden), eps=self.style_eps)
 
-    def _select_style_gap(self, style_source):
-        selected_styles, selected_indices, _ = self.style_queues.select(style_source)
-        if not self.target_domains:
-            return (
-                torch.zeros_like(style_source),
-                torch.zeros_like(style_source),
-                selected_indices,
-            )
+    def _compute_domain_statistics(self, image_u_dict):
+        target_batch_styles = OrderedDict()
+        pi_domain_by_target = OrderedDict()
 
-        selected_stack = torch.stack(
-            [selected_styles[domain_name].to(style_source.device) for domain_name in self.target_domains],
-            dim=0,
-        )
-        selected_mean = selected_stack.mean(dim=0)
-        style_gap = (selected_stack - style_source.unsqueeze(0)).mean(dim=0)
-        return style_gap, selected_mean, selected_indices
+        for domain_name, image_u in image_u_dict.items():
+            style_t = self._extract_style(image_u)
+            style_domain = style_t.mean(dim=0)
+            target_batch_styles[domain_name] = style_domain
+            pi_domain_by_target[domain_name] = self.prompt_learner.compute_pi_domain(style_domain)
 
-    def _selection_distribution(self, selected_indices):
-        distribution = OrderedDict()
-        for domain_name, indices in selected_indices.items():
-            if indices.numel() == 0:
-                distribution[domain_name] = {}
-                continue
-            valid = indices[indices >= 0]
-            if valid.numel() == 0:
-                distribution[domain_name] = {}
-                continue
-            counts = torch.bincount(valid, minlength=int(valid.max().item()) + 1)
-            distribution[domain_name] = {
-                int(idx): int(count.item()) for idx, count in enumerate(counts) if count.item() > 0
-            }
-        return distribution
+        return target_batch_styles, pi_domain_by_target
 
     def _compute_logits(self, image_features, prompts):
         image_features_norm = image_features / image_features.norm(dim=-1, keepdim=True)
@@ -149,21 +145,23 @@ class CustomCLIPStylePromptMTDA(nn.Module):
             logits.append(logits_i)
         return torch.stack(logits)
 
+    @staticmethod
+    def _entropy_from_logits(logits):
+        probs = F.softmax(logits, dim=-1)
+        return -(probs * probs.clamp_min(1e-12).log()).sum(dim=1).mean()
+
     def _log_debug_once(
         self,
         image_s,
         image_u_dict,
-        style_s,
         target_batch_styles,
-        queue_lengths,
-        selected_style,
-        style_gap,
-        pi_img,
-        pi_style,
+        pi_domain_by_target,
+        pi_img_s,
+        logits_example,
         beta,
-        logits,
-        loss,
-        selection_distribution,
+        loss_src,
+        loss_ent,
+        loss_total,
     ):
         if not self.debug_print_once or self._has_printed_debug:
             return
@@ -174,83 +172,95 @@ class CustomCLIPStylePromptMTDA(nn.Module):
         print("source batch shape:", tuple(image_s.shape))
         for domain_name, image_u in image_u_dict.items():
             print(f"target batch shape [{domain_name}]:", tuple(image_u.shape))
-        print("style_s shape:", tuple(style_s.shape))
-        for domain_name, batch_style in target_batch_styles.items():
-            print(f"target batch style shape [{domain_name}]:", tuple(batch_style.shape))
-        print("queue length per target domain:", queue_lengths)
-        print("selected style shape:", tuple(selected_style.shape))
-        print("style_gap shape:", tuple(style_gap.shape))
-        print("pi_img shape:", tuple(pi_img.shape))
-        print("pi_style shape:", tuple(pi_style.shape))
+        for domain_name, style_domain in target_batch_styles.items():
+            print(f"target batch style shape [{domain_name}]:", tuple(style_domain.shape))
+        for domain_name, pi_domain in pi_domain_by_target.items():
+            print(f"pi_domain shape [{domain_name}]:", tuple(pi_domain.shape))
+        print("pi_img shape:", tuple(pi_img_s.shape))
         print("beta:", float(beta.detach().item()))
-        print("logits shape:", tuple(logits.shape))
-        print("loss:", float(loss.detach().item()))
-        print("pi_style norm:", float(pi_style.norm(dim=-1).mean().detach().item()))
-        print("style_gap norm:", float(style_gap.norm(dim=-1).mean().detach().item()))
-        print("selected queue index distribution:", selection_distribution)
+        print(
+            "pi_domain_norm:",
+            float(torch.stack([v.norm() for v in pi_domain_by_target.values()]).mean().detach().item()),
+        )
+        print("logits shape:", tuple(logits_example.shape))
+        print("loss_src:", float(loss_src.detach().item()))
+        print("loss_ent:", float(loss_ent.detach().item()))
+        print("loss_total:", float(loss_total.detach().item()))
         self._has_printed_debug = True
 
     def forward_train(self, image_s, label_s, image_u_dict):
-        image_features = self.image_encoder(image_s.type(self.dtype))
-        style_s = self._extract_style(image_s)
+        image_features_s = self.image_encoder(image_s.type(self.dtype))
+        pi_img_s = self.prompt_learner.compute_pi_img(image_features_s)
 
-        target_batch_styles = OrderedDict()
-        for domain_name, image_u in image_u_dict.items():
-            style_t = self._extract_style(image_u)
-            batch_style = style_t.mean(dim=0)
-            target_batch_styles[domain_name] = batch_style
-            self.style_queues.enqueue(domain_name, batch_style)
+        target_batch_styles, pi_domain_by_target = self._compute_domain_statistics(image_u_dict)
 
-        style_gap, selected_style, selected_indices = self._select_style_gap(style_s)
-        selection_distribution = self._selection_distribution(selected_indices)
-        self._latest_selection_distribution = selection_distribution
+        loss_src_terms = []
+        acc_terms = []
+        logits_example = None
 
-        prompts, prompt_info = self.prompt_learner(image_features, style_gap=style_gap)
-        pi_img = prompt_info["pi_img"]
-        pi_style = prompt_info["pi_style"]
-        beta = prompt_info["beta"]
+        for domain_name in self.target_domains:
+            pi_domain = pi_domain_by_target[domain_name]
+            prompts_s, prompt_info_s = self.prompt_learner.build_prompts(pi_img_s, pi_domain=pi_domain)
+            logits_s = self._compute_logits(image_features_s, prompts_s)
+            if logits_example is None:
+                logits_example = logits_s
+            loss_ce_d = F.cross_entropy(logits_s, label_s)
+            loss_src_terms.append(loss_ce_d)
+            acc_terms.append(compute_accuracy(logits_s, label_s)[0].item())
 
-        assert pi_style.shape == pi_img.shape
-        assert torch.isfinite(pi_style).all()
+            assert prompt_info_s["pi_domain"].shape == pi_img_s.shape
+            assert torch.isfinite(prompt_info_s["pi_domain"]).all()
 
-        logits = self._compute_logits(image_features, prompts)
-        loss_ce = F.cross_entropy(logits, label_s)
-        assert torch.isfinite(loss_ce).all()
+        loss_src = torch.stack(loss_src_terms).mean()
+
+        if self.lambda_ent > 0:
+            loss_ent_terms = []
+            for domain_name, image_u in image_u_dict.items():
+                pi_domain = pi_domain_by_target[domain_name]
+                image_features_t = self.image_encoder(image_u.type(self.dtype))
+                pi_img_t = self.prompt_learner.compute_pi_img(image_features_t)
+                prompts_t, _ = self.prompt_learner.build_prompts(pi_img_t, pi_domain=pi_domain)
+                logits_t = self._compute_logits(image_features_t, prompts_t)
+                loss_ent_terms.append(self._entropy_from_logits(logits_t))
+            loss_ent = torch.stack(loss_ent_terms).mean()
+        else:
+            loss_ent = torch.zeros((), device=loss_src.device, dtype=loss_src.dtype)
+
+        beta = self.prompt_learner.beta.to(loss_src.dtype)
+        loss_total = loss_src + self.lambda_ent * loss_ent
+        assert torch.isfinite(loss_total).all()
 
         self._log_debug_once(
             image_s=image_s,
             image_u_dict=image_u_dict,
-            style_s=style_s,
             target_batch_styles=target_batch_styles,
-            queue_lengths=self.style_queues.lengths(),
-            selected_style=selected_style,
-            style_gap=style_gap,
-            pi_img=pi_img,
-            pi_style=pi_style,
+            pi_domain_by_target=pi_domain_by_target,
+            pi_img_s=pi_img_s,
+            logits_example=logits_example,
             beta=beta,
-            logits=logits,
-            loss=loss_ce,
-            selection_distribution=selection_distribution,
+            loss_src=loss_src,
+            loss_ent=loss_ent,
+            loss_total=loss_total,
         )
 
-        acc = compute_accuracy(logits, label_s)[0].item()
+        pi_domain_norm = torch.stack([v.norm() for v in pi_domain_by_target.values()]).mean().detach()
+        acc_src = torch.tensor(sum(acc_terms) / len(acc_terms), device=loss_total.device)
+
         return {
-            "loss": loss_ce,
-            "loss_ce": loss_ce.detach(),
-            "acc_src": torch.tensor(acc, device=loss_ce.device),
+            "loss": loss_total,
+            "loss_src": loss_src.detach(),
+            "loss_ent": loss_ent.detach(),
+            "loss_total": loss_total.detach(),
+            "acc_src": acc_src,
             "beta": beta.detach(),
-            "pi_style_norm": pi_style.norm(dim=-1).mean().detach(),
-            "style_gap_norm": style_gap.norm(dim=-1).mean().detach(),
+            "pi_domain_norm": pi_domain_norm,
         }
 
     def forward_inference(self, image, domain_name=None):
         image_features = self.image_encoder(image.type(self.dtype))
-        style = self._extract_style(image)
-        if all(length == 0 for length in self.style_queues.lengths().values()):
-            style_gap = torch.zeros_like(style)
-        else:
-            style_gap, _, _ = self._select_style_gap(style)
-        prompts, _ = self.prompt_learner(image_features, style_gap=style_gap)
+        style_domain = self._extract_style(image).mean(dim=0)
+        pi_domain = self.prompt_learner.compute_pi_domain(style_domain)
+        prompts, _ = self.prompt_learner(image_features, pi_domain=pi_domain)
         return self._compute_logits(image_features, prompts)
 
     def forward(self, image, domain_name=None):
@@ -261,9 +271,8 @@ class CustomCLIPStylePromptMTDA(nn.Module):
 class StylePromptMTDA(MultiTargetTrainerXU):
     def check_cfg(self, cfg):
         assert cfg.TRAINER.STYLE_PROMPT_MTDA.PREC in ["fp16", "fp32", "amp"]
-        assert cfg.TRAINER.STYLE_PROMPT.SELECTION == "domainwise_top1"
-        assert cfg.TRAINER.STYLE_PROMPT.DISTANCE == "cosine"
         assert cfg.TRAINER.STYLE_PROMPT.TOKEN_SCOPE == "patch"
+        assert cfg.TRAINER.STYLE_PROMPT.LAMBDA_ENT >= 0.0
 
     def build_model(self):
         cfg = self.cfg
@@ -335,9 +344,6 @@ class StylePromptMTDA(MultiTargetTrainerXU):
                 continue
             loss_summary[key] = value.item() if torch.is_tensor(value) else float(value)
 
-        if model.debug_print_once and model._latest_selection_distribution:
-            print("selection distribution:", model._latest_selection_distribution)
-
         if (self.batch_idx + 1) == self.num_batches:
             self.update_lr()
 
@@ -369,4 +375,3 @@ class StylePromptMTDA(MultiTargetTrainerXU):
             loaded_epoch = checkpoint["epoch"]
             print(f'Loading weights to {name} from "{model_path}" (epoch = {loaded_epoch})')
             self._models[name].load_state_dict(state_dict, strict=False)
-

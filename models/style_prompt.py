@@ -24,8 +24,12 @@ class StyleMLP(nn.Module):
         return self.net(style_gap)
 
 
+class DomainStyleMLP(StyleMLP):
+    """Shared MLP mapping a target-domain style vector to a prompt bias."""
+
+
 class TargetStyleQueues(nn.Module):
-    """A fixed-size queue for each target domain."""
+    """Legacy queue module kept only for backward compatibility."""
 
     def __init__(self, domain_names, style_dim, queue_size):
         super().__init__()

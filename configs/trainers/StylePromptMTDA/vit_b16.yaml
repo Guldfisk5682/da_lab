@@ -46,12 +46,9 @@ TRAINER:
     ENABLED: true
     STYLE_LAYER: 3
     TOKEN_SCOPE: "patch"
-    STYLE_QUEUE_SIZE: 8
-    SELECTION: "domainwise_top1"
-    DISTANCE: "cosine"
-    STYLE_MLP_HIDDEN: 128
+    DOMAIN_STYLE_MLP_HIDDEN: 128
     BETA_INIT: 0.0
     BETA_LEARNABLE: true
-    LOSS: "source_ce_only"
+    LOSS: "source_ce_plus_target_entropy"
+    LAMBDA_ENT: 0.01
     EPS: 1e-6
-
