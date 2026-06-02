@@ -169,7 +169,11 @@ def main(args):
         visible = os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>")
         print(
             "Using CUDA device: logical cuda:0"
-            f" (CUDA_VISIBLE_DEVICES={visible}, torch.current_device()={torch.cuda.current_device()})"
+            " "
+            f"(CUDA_DEVICE_ORDER={os.environ.get('CUDA_DEVICE_ORDER', '<unset>')}, "
+            f"CUDA_VISIBLE_DEVICES={visible}, "
+            f"torch.current_device()={torch.cuda.current_device()}, "
+            f"torch.cuda.device_count()={torch.cuda.device_count()})"
         )
         torch.backends.cudnn.benchmark = True
 

@@ -27,6 +27,9 @@ DATASET_CONFIG="${DATASET_CONFIG:-${REPO_ROOT}/configs/datasets/office_home_mtda
 BACKBONE="${BACKBONE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
 
+# Make CUDA logical numbering follow nvidia-smi ordering on shared servers.
+export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
+
 resolve_source_domain() {
   case "$1" in
     A) echo "art" ;;
@@ -125,6 +128,8 @@ echo "Source domain: ${SOURCE_DOMAIN}"
 echo "Target domains: ${TARGET_DOMAINS[*]}"
 echo "Seed: ${SEED}"
 echo "Output dir: ${OUTPUT_DIR}"
+echo "CUDA_DEVICE_ORDER: ${CUDA_DEVICE_ORDER}"
+echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-<unset>}"
 if [ "${DEBUG_FLAG}" = "--debug" ]; then
   echo "Debug mode: enabled"
 fi
