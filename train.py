@@ -1,4 +1,5 @@
 import argparse
+import os
 import torch
 
 from dassl.utils import setup_logger, set_random_seed, collect_env_info
@@ -162,6 +163,14 @@ def main(args):
     setup_logger(cfg.OUTPUT_DIR)
 
     if torch.cuda.is_available() and cfg.USE_CUDA:
+        # Respect CUDA_VISIBLE_DEVICES by binding the current process
+        # to the first visible logical GPU before any model/data placement.
+        torch.cuda.set_device(0)
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>")
+        print(
+            "Using CUDA device: logical cuda:0"
+            f" (CUDA_VISIBLE_DEVICES={visible}, torch.current_device()={torch.cuda.current_device()})"
+        )
         torch.backends.cudnn.benchmark = True
 
     print_args(args, cfg)
