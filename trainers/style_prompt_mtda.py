@@ -33,7 +33,6 @@ class StylePromptLearner(PromptLearner):
             input_dim=style_dim,
             hidden_dim=hidden_dim,
             output_dim=ctx_dim,
-            dtype=self.ctx.dtype if cfg.TRAINER.COCOOP.PREC == "fp16" else None,
         )
 
         beta_tensor = torch.tensor(float(style_cfg.BETA_INIT), dtype=self.ctx.dtype)
@@ -51,7 +50,7 @@ class StylePromptLearner(PromptLearner):
             domain_style = domain_style.unsqueeze(0)
             squeeze = True
 
-        pi_domain = self.domain_style_mlp(domain_style.to(self.ctx.dtype))
+        pi_domain = self.domain_style_mlp(domain_style.float())
         if squeeze:
             pi_domain = pi_domain[0]
         return pi_domain
@@ -116,6 +115,11 @@ class CustomCLIPStylePromptMTDA(nn.Module):
         self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
 
+    @staticmethod
+    def _ensure_finite(name, tensor):
+        if not torch.isfinite(tensor).all():
+            raise FloatingPointError(f"Non-finite values detected in {name}")
+
     def _extract_style(self, image):
         hidden = self.visual_adapter.forward_until(image, self.style_layer)
         if self.token_scope != "patch":
@@ -135,20 +139,26 @@ class CustomCLIPStylePromptMTDA(nn.Module):
         return target_batch_styles, pi_domain_by_target
 
     def _compute_logits(self, image_features, prompts):
-        image_features_norm = image_features / image_features.norm(dim=-1, keepdim=True)
-        logit_scale = self.logit_scale.exp()
+        image_features_norm = image_features.float()
+        image_features_norm = image_features_norm / image_features_norm.norm(
+            dim=-1, keepdim=True
+        ).clamp_min(1e-6)
+        logit_scale = self.logit_scale.float().exp()
         logits = []
         for prompts_i, image_feature_i in zip(prompts, image_features_norm):
-            text_features = self.text_encoder(prompts_i, self.tokenized_prompts)
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            text_features = self.text_encoder(prompts_i, self.tokenized_prompts).float()
+            text_features = text_features / text_features.norm(
+                dim=-1, keepdim=True
+            ).clamp_min(1e-6)
             logits_i = logit_scale * image_feature_i @ text_features.t()
             logits.append(logits_i)
         return torch.stack(logits)
 
     @staticmethod
     def _entropy_from_logits(logits):
-        probs = F.softmax(logits, dim=-1)
-        return -(probs * probs.clamp_min(1e-12).log()).sum(dim=1).mean()
+        log_probs = F.log_softmax(logits.float(), dim=-1)
+        probs = log_probs.exp()
+        return -(probs * log_probs).sum(dim=1).mean()
 
     def _log_debug_once(
         self,
@@ -190,9 +200,15 @@ class CustomCLIPStylePromptMTDA(nn.Module):
 
     def forward_train(self, image_s, label_s, image_u_dict):
         image_features_s = self.image_encoder(image_s.type(self.dtype))
+        self._ensure_finite("image_features_s", image_features_s)
         pi_img_s = self.prompt_learner.compute_pi_img(image_features_s)
+        self._ensure_finite("pi_img_s", pi_img_s)
 
         target_batch_styles, pi_domain_by_target = self._compute_domain_statistics(image_u_dict)
+        for domain_name, style_domain in target_batch_styles.items():
+            self._ensure_finite(f"style_domain[{domain_name}]", style_domain)
+        for domain_name, pi_domain in pi_domain_by_target.items():
+            self._ensure_finite(f"pi_domain[{domain_name}]", pi_domain)
 
         loss_src_terms = []
         acc_terms = []
@@ -202,33 +218,42 @@ class CustomCLIPStylePromptMTDA(nn.Module):
             pi_domain = pi_domain_by_target[domain_name]
             prompts_s, prompt_info_s = self.prompt_learner.build_prompts(pi_img_s, pi_domain=pi_domain)
             logits_s = self._compute_logits(image_features_s, prompts_s)
+            self._ensure_finite(f"logits_s[{domain_name}]", logits_s)
             if logits_example is None:
                 logits_example = logits_s
             loss_ce_d = F.cross_entropy(logits_s, label_s)
+            self._ensure_finite(f"loss_ce[{domain_name}]", loss_ce_d)
             loss_src_terms.append(loss_ce_d)
             acc_terms.append(compute_accuracy(logits_s, label_s)[0].item())
 
             assert prompt_info_s["pi_domain"].shape == pi_img_s.shape
-            assert torch.isfinite(prompt_info_s["pi_domain"]).all()
+            self._ensure_finite(f"prompt_info_s.pi_domain[{domain_name}]", prompt_info_s["pi_domain"])
 
         loss_src = torch.stack(loss_src_terms).mean()
+        self._ensure_finite("loss_src", loss_src)
 
         if self.lambda_ent > 0:
             loss_ent_terms = []
             for domain_name, image_u in image_u_dict.items():
                 pi_domain = pi_domain_by_target[domain_name]
                 image_features_t = self.image_encoder(image_u.type(self.dtype))
+                self._ensure_finite(f"image_features_t[{domain_name}]", image_features_t)
                 pi_img_t = self.prompt_learner.compute_pi_img(image_features_t)
+                self._ensure_finite(f"pi_img_t[{domain_name}]", pi_img_t)
                 prompts_t, _ = self.prompt_learner.build_prompts(pi_img_t, pi_domain=pi_domain)
                 logits_t = self._compute_logits(image_features_t, prompts_t)
-                loss_ent_terms.append(self._entropy_from_logits(logits_t))
+                self._ensure_finite(f"logits_t[{domain_name}]", logits_t)
+                loss_ent_d = self._entropy_from_logits(logits_t)
+                self._ensure_finite(f"loss_ent[{domain_name}]", loss_ent_d)
+                loss_ent_terms.append(loss_ent_d)
             loss_ent = torch.stack(loss_ent_terms).mean()
         else:
             loss_ent = torch.zeros((), device=loss_src.device, dtype=loss_src.dtype)
+        self._ensure_finite("loss_ent", loss_ent)
 
         beta = self.prompt_learner.beta.to(loss_src.dtype)
         loss_total = loss_src + self.lambda_ent * loss_ent
-        assert torch.isfinite(loss_total).all()
+        self._ensure_finite("loss_total", loss_total)
 
         self._log_debug_once(
             image_s=image_s,
