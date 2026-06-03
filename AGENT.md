@@ -22,7 +22,7 @@ Protocol: source-available closed-set SS-MTDA
 Backbone: CLIP ViT-B/16
 Base method: CoCoOp / CoCoOpMTDA
 New method: CoCoOpVPTMTDA
-Core idea: CoCoOp text prompt learning + shallow visual prompt tuning
+Core idea: CoCoOp text prompt learning + depth-configurable visual prompt tuning
 ```
 
 新方向要求：
@@ -32,17 +32,18 @@ Core idea: CoCoOp text prompt learning + shallow visual prompt tuning
 3. 保持原始 `CoOp / CoCoOp` trainer 可用。
 4. `StylePromptMTDA` 已被判定为收益微弱的历史实验，不要继续堆新结构。
 5. 新增实验优先围绕 `OfficeHomeMTDA -> CoCoOpMTDA -> CoCoOpVPTMTDA` 这条主路径展开。
-6. 第一版 VPT 只训练 `prompt_learner.*` 和 `image_encoder.vctx`，冻结 CLIP 主体。
+6. VPT 只训练 `prompt_learner.*` 和 `image_encoder.vctx`，冻结 CLIP 主体。
 7. 本地只做 `train.py --help`、synthetic smoke test、脚本与日志结构验证。
 
-第一版 `CoCoOpVPTMTDA` 结构：
+`CoCoOpVPTMTDA` 结构：
 
 ```text
 image
   -> patch embedding
   -> [CLS + patch tokens]
-  -> append learnable visual ctx [N_VCTX, vision_dim]
-  -> frozen CLIP ViT blocks
+  -> for blocks 1..VISION_PROMPT_DEPTH:
+       replace visual prompt tokens with vctx[layer]
+       run frozen CLIP ViT block
   -> CLS image feature
   -> CoCoOp metanet -> dynamic text prompt
   -> source CE loss
@@ -53,6 +54,7 @@ image
 - 新主线新增独立 trainer/config/script，不要改坏 `trainers/cocoop.py`。
 - `StylePromptMTDA` 可以继续保留用于复现实验表，但不再作为默认方法。
 - 新方法输出目录必须和历史方法分开，例如 `output/office_home_mtda/cocoop_vpt/...`。
+- VPT 超参扫描使用 `METHOD_TAG` 分目录，例如 `cocoop_vpt_ctx4_d3`。
 - 如果后续要做 MaPLe-style coupling，先保留 `CoCoOpVPTMTDA` 作为 independent VPT baseline。
 
 ## Project Mission
@@ -118,6 +120,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-06-03: Merged `ss-mtda-style-prompt` into `main` as infrastructure, then opened `cocoop-vpt-mtda` for the new multi-prompt DA direction. The merge keeps Office-Home MTDA dataloading, `CoCoOpMTDA`, Office-Home download/verify scripts, result collection, and server CUDA fixes.
 - 2026-06-03: Marked `StylePromptMTDA` as a deprecated negative-result path. Experiments showed pure text-side target-style prompt modulation gives only tiny and unstable gains over `CoCoOpMTDA`, so future work should not keep tuning style queue/domain-mean prompt bias.
 - 2026-06-03: Added the first new active method, `CoCoOpVPTMTDA`: CoCoOp text prompt learning plus an independent shallow visual prompt tensor appended to CLIP ViT tokens. This is the first multi-prompt tuning DA experiment and should be compared against `CoCoOpMTDA`.
+- 2026-06-03: Extended `CoCoOpVPTMTDA` from shallow-only VPT to depth-configurable VPT. `VISION_PROMPT_DEPTH=1` preserves the shallow setting, while larger depths use independent per-layer visual prompt tensors and replace prompt tokens before each prompted block.
 - 2026-05-30: Created the clean research branch `ss-mtda-style-prompt` and switched the active path away from `Office-31 / V0 / V1 / legacy-GSPA`.
 - 2026-05-30: Archived the old experimental routes into `archive/v0_v1_ablation/` and `archive/legacy_gspa/`, keeping the original `CoOp / CoCoOp` baseline trainers active in the main tree.
 - 2026-05-30: Added `OfficeHomeMTDA` for source-available closed-set single-source multi-target adaptation, with one labeled source domain and three unlabeled target domains per run.

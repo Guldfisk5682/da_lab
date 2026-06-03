@@ -2,7 +2,7 @@
 
 当前活跃方向是 `Office-Home` 的 source-available closed-set SS-MTDA。
 
-当前主线方法是 `CoCoOpVPTMTDA`：在 `CoCoOpMTDA` 基础上加入 independent shallow visual prompt tuning。`StylePromptMTDA` 已保留为历史实验，不再作为默认扩展方向。
+当前主线方法是 `CoCoOpVPTMTDA`：在 `CoCoOpMTDA` 基础上加入 independent visual prompt tuning，并支持通过 `VISION_PROMPT_DEPTH` 调整 shallow/deep VPT。`StylePromptMTDA` 已保留为历史实验，不再作为默认扩展方向。
 
 ## 环境准备
 
@@ -170,6 +170,24 @@ bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt --debug
 bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_mt
 bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
 bash scripts/style_prompt_mtda/run_officehome_all.sh style_prompt
+```
+
+VPT 超参扫描建议用 `METHOD_TAG` 分开输出目录，避免覆盖或 resume 到旧实验：
+
+```bash
+export EXTRA_OPTS="DATALOADER.TRAIN_X.BATCH_SIZE 2 DATALOADER.TRAIN_U.BATCH_SIZE 2"
+
+METHOD_TAG=cocoop_vpt_ctx4_d1 \
+EXTRA_OPTS="${EXTRA_OPTS} TRAINER.COCOOP_VPT_MTDA.N_VCTX 4 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1" \
+bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
+
+METHOD_TAG=cocoop_vpt_ctx4_d3 \
+EXTRA_OPTS="${EXTRA_OPTS} TRAINER.COCOOP_VPT_MTDA.N_VCTX 4 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 3" \
+bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
+
+METHOD_TAG=cocoop_vpt_ctx8_d1 \
+EXTRA_OPTS="${EXTRA_OPTS} TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1" \
+bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
 ```
 
 结果汇总：

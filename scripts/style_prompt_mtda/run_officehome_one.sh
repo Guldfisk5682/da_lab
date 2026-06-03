@@ -89,6 +89,7 @@ case "${METHOD}" in
     ;;
 esac
 
+TRAINER_DIR="${METHOD_TAG:-${TRAINER_DIR}}"
 TASK_TAG="${SOURCE_CODE}2${TARGET_CODES[0]}${TARGET_CODES[1]}${TARGET_CODES[2]}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/output/office_home_mtda/${TRAINER_DIR}/${TASK_TAG}/seed${SEED}}"
 
@@ -130,6 +131,7 @@ fi
 echo "==============================================="
 echo "Method: ${METHOD}"
 echo "Trainer: ${TRAINER}"
+echo "Method tag: ${TRAINER_DIR}"
 echo "Source domain: ${SOURCE_DOMAIN}"
 echo "Target domains: ${TARGET_DOMAINS[*]}"
 echo "Seed: ${SEED}"

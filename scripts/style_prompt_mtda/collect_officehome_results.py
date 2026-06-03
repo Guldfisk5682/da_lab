@@ -50,7 +50,13 @@ def parse_log(log_path):
 
 def collect(root, seed):
     rows = []
-    for method_dir, method_name in METHOD_DIRS.items():
+    method_dirs = OrderedDict(METHOD_DIRS)
+    if root.is_dir():
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and child.name.startswith("cocoop_vpt"):
+                method_dirs.setdefault(child.name, child.name)
+
+    for method_dir, method_name in method_dirs.items():
         for source_code, targets in SOURCE_TARGETS.items():
             task_tag = f"{source_code}2{''.join(targets)}"
             log_path = root / method_dir / task_tag / f"seed{seed}" / "log.txt"

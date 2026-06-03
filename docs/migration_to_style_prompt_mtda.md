@@ -70,14 +70,17 @@
 - `models/visual_prompt.py`
 - `configs/trainers/CoCoOpVPTMTDA/vit_b16.yaml`
 
-第一版只验证 independent shallow visual prompt tuning：
+当前先验证 independent visual prompt tuning：
 
 ```text
-CoCoOp text prompt learner + learnable visual ctx appended to CLIP ViT tokens
+CoCoOp text prompt learner + learnable visual ctx injected into CLIP ViT blocks
 ```
 
 目标是先回答视觉侧 prompt 是否能稳定提升 `CoCoOpMTDA`，再决定是否推进
 MaPLe-style text/vision prompt coupling。
+
+`VISION_PROMPT_DEPTH=1` 对应 shallow VPT。更大的 depth 会使用每层独立的
+`vctx[layer]`，并在对应 ViT block 前替换 prompt tokens，而不是不断追加 tokens。
 
 ### Dataset
 
