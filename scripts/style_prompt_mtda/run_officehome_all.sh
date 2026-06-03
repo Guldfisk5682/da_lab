@@ -13,7 +13,7 @@ fi
 cd "${REPO_ROOT}"
 
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-  echo "Usage: bash scripts/style_prompt_mtda/run_officehome_all.sh <cocoop_mt|cocoop|style_prompt|style_prompt_mtda> [--debug]" >&2
+  echo "Usage: bash scripts/style_prompt_mtda/run_officehome_all.sh <cocoop_mt|cocoop|cocoop_vpt|style_prompt|style_prompt_mtda> [--debug]" >&2
   exit 1
 fi
 

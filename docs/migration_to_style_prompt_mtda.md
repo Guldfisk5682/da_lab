@@ -1,4 +1,4 @@
-# Migration To Style-Prompt MTDA
+# Migration To Office-Home MTDA And VPT
 
 ## 废弃并归档的旧路线
 
@@ -61,6 +61,24 @@
 
 ## 新方向入口
 
+### 当前活跃主线
+
+`StylePromptMTDA` 已保留为历史实验，但不再作为当前主线继续扩展。
+当前活跃方法是：
+
+- `trainers/cocoop_vpt_mtda.py`
+- `models/visual_prompt.py`
+- `configs/trainers/CoCoOpVPTMTDA/vit_b16.yaml`
+
+第一版只验证 independent shallow visual prompt tuning：
+
+```text
+CoCoOp text prompt learner + learnable visual ctx appended to CLIP ViT tokens
+```
+
+目标是先回答视觉侧 prompt 是否能稳定提升 `CoCoOpMTDA`，再决定是否推进
+MaPLe-style text/vision prompt coupling。
+
 ### Dataset
 
 - `datasets/office_home_mtda.py`
@@ -69,12 +87,14 @@
 ### Trainers
 
 - `trainers/cocoop_mtda.py`
+- `trainers/cocoop_vpt_mtda.py`
 - `trainers/style_prompt_mtda.py`
 - `trainers/mtda_base.py`
 
 ### Configs
 
 - `configs/trainers/CoCoOpMTDA/vit_b16.yaml`
+- `configs/trainers/CoCoOpVPTMTDA/vit_b16.yaml`
 - `configs/trainers/StylePromptMTDA/vit_b16.yaml`
 
 ### Scripts
@@ -97,6 +117,7 @@ python train.py --help
 
 ```bash
 bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 cocoop_mt --debug
+bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 cocoop_vpt --debug
 bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt --debug
 ```
 

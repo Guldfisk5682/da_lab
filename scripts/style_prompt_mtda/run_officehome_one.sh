@@ -13,7 +13,7 @@ fi
 cd "${REPO_ROOT}"
 
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
-  echo "Usage: bash scripts/style_prompt_mtda/run_officehome_one.sh <A|C|P|R> <SEED> <cocoop_mt|style_prompt> [--debug]" >&2
+  echo "Usage: bash scripts/style_prompt_mtda/run_officehome_one.sh <A|C|P|R> <SEED> <cocoop_mt|cocoop_vpt|style_prompt> [--debug]" >&2
   exit 1
 fi
 
@@ -70,6 +70,12 @@ case "${METHOD}" in
     TRAINER_DIR="cocoop_mt"
     CFG="${REPO_ROOT}/configs/trainers/CoCoOpMTDA/vit_b16.yaml"
     DEBUG_OPT_KEY="TRAINER.COCOOP_MTDA.DEBUG.PRINT_ONCE"
+    ;;
+  cocoop_vpt|vpt|cocoop_vpt_mtda)
+    TRAINER="CoCoOpVPTMTDA"
+    TRAINER_DIR="cocoop_vpt"
+    CFG="${REPO_ROOT}/configs/trainers/CoCoOpVPTMTDA/vit_b16.yaml"
+    DEBUG_OPT_KEY="TRAINER.COCOOP_VPT_MTDA.DEBUG.PRINT_ONCE"
     ;;
   style_prompt|style_prompt_mtda)
     TRAINER="StylePromptMTDA"

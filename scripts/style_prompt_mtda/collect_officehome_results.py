@@ -18,6 +18,7 @@ SOURCE_TARGETS = OrderedDict(
 METHOD_DIRS = OrderedDict(
     [
         ("cocoop_mt", "CoCoOpMTDA"),
+        ("cocoop_vpt", "CoCoOpVPTMTDA"),
         ("style_prompt", "StylePromptMTDA"),
     ]
 )
@@ -135,4 +136,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -5,10 +5,11 @@
 当前活跃研究分支已切换为：
 
 ```text
-ss-mtda-style-prompt
+cocoop-vpt-mtda
 ```
 
-当前主线目标不再是 `Office-31 / V0 / V1 / legacy-GSPA`。这些路线仅作为历史参考保留在：
+当前主线目标不再是 `Office-31 / V0 / V1 / legacy-GSPA / StylePromptMTDA`。
+这些路线仅作为历史参考或基础设施来源保留在：
 
 - `archive/v0_v1_ablation/`
 - `archive/legacy_gspa/`
@@ -20,8 +21,8 @@ Dataset: Office-Home
 Protocol: source-available closed-set SS-MTDA
 Backbone: CLIP ViT-B/16
 Base method: CoCoOp / CoCoOpMTDA
-New method: StylePromptMTDA
-Core idea: target-style prompt modulation inside the prompt learner
+New method: CoCoOpVPTMTDA
+Core idea: CoCoOp text prompt learning + shallow visual prompt tuning
 ```
 
 新方向要求：
@@ -29,8 +30,30 @@ Core idea: target-style prompt modulation inside the prompt learner
 1. 不下载真实数据集或模型权重，除非用户明确要求并且在远程服务器执行。
 2. 不再把 hidden-state style swap / gate / last3 tuning 作为默认方法。
 3. 保持原始 `CoOp / CoCoOp` trainer 可用。
-4. 新增实验优先围绕 `OfficeHomeMTDA -> CoCoOpMTDA -> StylePromptMTDA` 这条主路径展开。
-5. 本地只做 `train.py --help`、synthetic smoke test、脚本与日志结构验证。
+4. `StylePromptMTDA` 已被判定为收益微弱的历史实验，不要继续堆新结构。
+5. 新增实验优先围绕 `OfficeHomeMTDA -> CoCoOpMTDA -> CoCoOpVPTMTDA` 这条主路径展开。
+6. 第一版 VPT 只训练 `prompt_learner.*` 和 `image_encoder.vctx`，冻结 CLIP 主体。
+7. 本地只做 `train.py --help`、synthetic smoke test、脚本与日志结构验证。
+
+第一版 `CoCoOpVPTMTDA` 结构：
+
+```text
+image
+  -> patch embedding
+  -> [CLS + patch tokens]
+  -> append learnable visual ctx [N_VCTX, vision_dim]
+  -> frozen CLIP ViT blocks
+  -> CLS image feature
+  -> CoCoOp metanet -> dynamic text prompt
+  -> source CE loss
+```
+
+维护约定：
+
+- 新主线新增独立 trainer/config/script，不要改坏 `trainers/cocoop.py`。
+- `StylePromptMTDA` 可以继续保留用于复现实验表，但不再作为默认方法。
+- 新方法输出目录必须和历史方法分开，例如 `output/office_home_mtda/cocoop_vpt/...`。
+- 如果后续要做 MaPLe-style coupling，先保留 `CoCoOpVPTMTDA` 作为 independent VPT baseline。
 
 ## Project Mission
 
@@ -92,6 +115,9 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 
 ## Work Log
 
+- 2026-06-03: Merged `ss-mtda-style-prompt` into `main` as infrastructure, then opened `cocoop-vpt-mtda` for the new multi-prompt DA direction. The merge keeps Office-Home MTDA dataloading, `CoCoOpMTDA`, Office-Home download/verify scripts, result collection, and server CUDA fixes.
+- 2026-06-03: Marked `StylePromptMTDA` as a deprecated negative-result path. Experiments showed pure text-side target-style prompt modulation gives only tiny and unstable gains over `CoCoOpMTDA`, so future work should not keep tuning style queue/domain-mean prompt bias.
+- 2026-06-03: Added the first new active method, `CoCoOpVPTMTDA`: CoCoOp text prompt learning plus an independent shallow visual prompt tensor appended to CLIP ViT tokens. This is the first multi-prompt tuning DA experiment and should be compared against `CoCoOpMTDA`.
 - 2026-05-30: Created the clean research branch `ss-mtda-style-prompt` and switched the active path away from `Office-31 / V0 / V1 / legacy-GSPA`.
 - 2026-05-30: Archived the old experimental routes into `archive/v0_v1_ablation/` and `archive/legacy_gspa/`, keeping the original `CoOp / CoCoOp` baseline trainers active in the main tree.
 - 2026-05-30: Added `OfficeHomeMTDA` for source-available closed-set single-source multi-target adaptation, with one labeled source domain and three unlabeled target domains per run.

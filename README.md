@@ -1,6 +1,8 @@
 # da_lab
 
-当前活跃分支方向是 `Office-Home` 的 source-available closed-set SS-MTDA。
+当前活跃方向是 `Office-Home` 的 source-available closed-set SS-MTDA。
+
+当前主线方法是 `CoCoOpVPTMTDA`：在 `CoCoOpMTDA` 基础上加入 independent shallow visual prompt tuning。`StylePromptMTDA` 已保留为历史实验，不再作为默认扩展方向。
 
 ## 环境准备
 
@@ -23,10 +25,13 @@ pip install -r requirements.txt
 - `trainers/coop.py`
 - `trainers/cocoop.py`
 - `trainers/cocoop_mtda.py`
+- `trainers/cocoop_vpt_mtda.py`
 - `trainers/style_prompt_mtda.py`
+- `models/visual_prompt.py`
 - `datasets/office_home_mtda.py`
 - `configs/datasets/office_home_mtda.yaml`
 - `configs/trainers/CoCoOpMTDA/vit_b16.yaml`
+- `configs/trainers/CoCoOpVPTMTDA/vit_b16.yaml`
 - `configs/trainers/StylePromptMTDA/vit_b16.yaml`
 - `scripts/style_prompt_mtda/run_officehome_one.sh`
 - `scripts/style_prompt_mtda/run_officehome_all.sh`
@@ -147,6 +152,7 @@ DATA_ROOT/
 
 ```bash
 bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 cocoop_mt
+bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 cocoop_vpt
 bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt
 ```
 
@@ -154,6 +160,7 @@ bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt
 
 ```bash
 bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 cocoop_mt --debug
+bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 cocoop_vpt --debug
 bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt --debug
 ```
 
@@ -161,6 +168,7 @@ bash scripts/style_prompt_mtda/run_officehome_one.sh A 1 style_prompt --debug
 
 ```bash
 bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_mt
+bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
 bash scripts/style_prompt_mtda/run_officehome_all.sh style_prompt
 ```
 
