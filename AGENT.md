@@ -125,6 +125,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-06-03: Extended `CoCoOpVPTMTDA` from shallow-only VPT to depth-configurable VPT. `VISION_PROMPT_DEPTH=1` preserves the shallow setting, while larger depths use independent per-layer visual prompt tensors and replace prompt tokens before each prompted block.
 - 2026-06-04: Fixed the depth-configurable VPT path so `VISION_PROMPT_DEPTH=1` is exactly equivalent to the original shallow VPT implementation. The first visual prompt is appended before `ln_pre`; deeper prompts are replaced before later ViT blocks.
 - 2026-06-04: Added `VCTX_POSITION` for visual prompt position ablation. `append` keeps the current persistent VCTX path after patch tokens, while `insert` places VCTX between CLS and patch tokens.
+- 2026-06-04: Added `scripts/style_prompt_mtda/run_seed23_cocoop_vpt.sh` for uninterrupted seed2/3 runs of `CoCoOpMTDA` and `cocoop_vpt_ctx8_d1`, and upgraded `collect_officehome_results.py` to support multi-seed mean/std summaries.
 - 2026-05-30: Created the clean research branch `ss-mtda-style-prompt` and switched the active path away from `Office-31 / V0 / V1 / legacy-GSPA`.
 - 2026-05-30: Archived the old experimental routes into `archive/v0_v1_ablation/` and `archive/legacy_gspa/`, keeping the original `CoOp / CoCoOp` baseline trainers active in the main tree.
 - 2026-05-30: Added `OfficeHomeMTDA` for source-available closed-set single-source multi-target adaptation, with one labeled source domain and three unlabeled target domains per run.

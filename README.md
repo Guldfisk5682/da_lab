@@ -206,6 +206,19 @@ bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
 python scripts/style_prompt_mtda/collect_officehome_results.py
 ```
 
+如果要一次性补跑 `seed=2/3` 的 `CoCoOpMTDA` 和当前主方法
+`cocoop_vpt_ctx8_d1`：
+
+```bash
+bash scripts/style_prompt_mtda/run_seed23_cocoop_vpt.sh
+```
+
+多 seed 汇总：
+
+```bash
+python scripts/style_prompt_mtda/collect_officehome_results.py --seeds 1 2 3
+```
+
 `OfficeHomeMTDA` 不会物理重写数据集文件，而是在运行时自动组织成：
 
 - `1` 个 labeled source loader
