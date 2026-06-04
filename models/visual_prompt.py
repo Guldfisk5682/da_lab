@@ -45,13 +45,17 @@ class ShallowVPTVisualEncoder(nn.Module):
         x = torch.cat([cls_token, x], dim=1)
         x = x + self.visual.positional_embedding.to(x.dtype)
 
+        base_len = x.shape[1]
+        visual_ctx = self.vctx[0].unsqueeze(0).expand(x.shape[0], -1, -1)
+        visual_ctx = visual_ctx.to(dtype=x.dtype, device=x.device)
+        x = torch.cat([x, visual_ctx], dim=1)
+
         x = self.visual.ln_pre(x)
         x = x.permute(1, 0, 2)
 
-        base_len = x.shape[0]
         batch_size = x.shape[1]
         for layer_idx, block in enumerate(self.visual.transformer.resblocks, start=1):
-            if layer_idx <= self.prompt_depth:
+            if 1 < layer_idx <= self.prompt_depth:
                 x = x[:base_len]
                 visual_ctx = self.vctx[layer_idx - 1].to(dtype=x.dtype, device=x.device)
                 visual_ctx = visual_ctx.unsqueeze(0).expand(batch_size, -1, -1)
