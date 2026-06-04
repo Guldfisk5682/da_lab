@@ -30,6 +30,7 @@ class CustomCLIPVPTMTDA(nn.Module):
             n_vctx=vpt_cfg.N_VCTX,
             init_std=vpt_cfg.VCTX_INIT_STD,
             prompt_depth=vpt_cfg.VISION_PROMPT_DEPTH,
+            prompt_position=vpt_cfg.VCTX_POSITION,
         )
         self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
@@ -69,6 +70,7 @@ class CustomCLIPVPTMTDA(nn.Module):
             print(f"target batch shape [{domain_name}]:", tuple(image_u.shape))
         print("vctx shape:", tuple(self.image_encoder.vctx.shape))
         print("vision prompt depth:", self.image_encoder.prompt_depth)
+        print("vctx position:", self.image_encoder.prompt_position)
         print("vctx norm:", float(self.image_encoder.vctx.detach().float().norm().item()))
         print("image feature shape:", tuple(image_features.shape))
         print("pi_img shape:", tuple(pi_img.shape))
@@ -104,6 +106,7 @@ class CoCoOpVPTMTDA(MultiTargetTrainerXU):
         assert cfg.TRAINER.COCOOP_VPT_MTDA.PREC in ["fp16", "fp32", "amp"]
         assert cfg.TRAINER.COCOOP_VPT_MTDA.N_VCTX > 0
         assert cfg.TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH > 0
+        assert cfg.TRAINER.COCOOP_VPT_MTDA.VCTX_POSITION in ["append", "insert"]
 
     def build_model(self):
         cfg = self.cfg

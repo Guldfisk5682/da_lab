@@ -190,6 +190,16 @@ EXTRA_OPTS="${EXTRA_OPTS} TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MT
 bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
 ```
 
+如果要比较 visual context token 位置，可以把默认 `append` 改成 `insert`：
+
+```bash
+export EXTRA_OPTS="DATALOADER.TRAIN_X.BATCH_SIZE 2 DATALOADER.TRAIN_U.BATCH_SIZE 2"
+
+METHOD_TAG=cocoop_vpt_insert_ctx8_d1 \
+EXTRA_OPTS="${EXTRA_OPTS} TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1 TRAINER.COCOOP_VPT_MTDA.VCTX_POSITION insert" \
+bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
+```
+
 结果汇总：
 
 ```bash

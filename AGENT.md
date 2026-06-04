@@ -41,6 +41,7 @@ Core idea: CoCoOp text prompt learning + depth-configurable visual prompt tuning
 image
   -> patch embedding
   -> [CLS + patch tokens]
+  -> VCTX_POSITION controls append vs insert after CLS
   -> for blocks 1..VISION_PROMPT_DEPTH:
        replace visual prompt tokens with vctx[layer]
        run frozen CLIP ViT block
@@ -55,6 +56,7 @@ image
 - `StylePromptMTDA` 可以继续保留用于复现实验表，但不再作为默认方法。
 - 新方法输出目录必须和历史方法分开，例如 `output/office_home_mtda/cocoop_vpt/...`。
 - VPT 超参扫描使用 `METHOD_TAG` 分目录，例如 `cocoop_vpt_ctx4_d3`。
+- 使用 `TRAINER.COCOOP_VPT_MTDA.VCTX_POSITION append|insert` 做 prompt position 消融。
 - 如果后续要做 MaPLe-style coupling，先保留 `CoCoOpVPTMTDA` 作为 independent VPT baseline。
 
 ## Project Mission
@@ -122,6 +124,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-06-03: Added the first new active method, `CoCoOpVPTMTDA`: CoCoOp text prompt learning plus an independent shallow visual prompt tensor appended to CLIP ViT tokens. This is the first multi-prompt tuning DA experiment and should be compared against `CoCoOpMTDA`.
 - 2026-06-03: Extended `CoCoOpVPTMTDA` from shallow-only VPT to depth-configurable VPT. `VISION_PROMPT_DEPTH=1` preserves the shallow setting, while larger depths use independent per-layer visual prompt tensors and replace prompt tokens before each prompted block.
 - 2026-06-04: Fixed the depth-configurable VPT path so `VISION_PROMPT_DEPTH=1` is exactly equivalent to the original shallow VPT implementation. The first visual prompt is appended before `ln_pre`; deeper prompts are replaced before later ViT blocks.
+- 2026-06-04: Added `VCTX_POSITION` for visual prompt position ablation. `append` keeps the current persistent VCTX path after patch tokens, while `insert` places VCTX between CLS and patch tokens.
 - 2026-05-30: Created the clean research branch `ss-mtda-style-prompt` and switched the active path away from `Office-31 / V0 / V1 / legacy-GSPA`.
 - 2026-05-30: Archived the old experimental routes into `archive/v0_v1_ablation/` and `archive/legacy_gspa/`, keeping the original `CoOp / CoCoOp` baseline trainers active in the main tree.
 - 2026-05-30: Added `OfficeHomeMTDA` for source-available closed-set single-source multi-target adaptation, with one labeled source domain and three unlabeled target domains per run.

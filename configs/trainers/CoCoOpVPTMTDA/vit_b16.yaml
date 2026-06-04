@@ -43,6 +43,7 @@ TRAINER:
     N_VCTX: 4
     VCTX_INIT_STD: 0.02
     VISION_PROMPT_DEPTH: 1
+    VCTX_POSITION: "append"
     DEBUG:
       PRINT_ONCE: false
   STYLE_PROMPT:

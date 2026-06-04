@@ -5,7 +5,14 @@ import torch.nn as nn
 class ShallowVPTVisualEncoder(nn.Module):
     """CLIP ViT visual encoder with shallow/deep visual prompt tokens."""
 
-    def __init__(self, visual, n_vctx=4, init_std=0.02, prompt_depth=1):
+    def __init__(
+        self,
+        visual,
+        n_vctx=4,
+        init_std=0.02,
+        prompt_depth=1,
+        prompt_position="append",
+    ):
         super().__init__()
         if not hasattr(visual, "transformer") or not hasattr(
             visual.transformer, "resblocks"
@@ -15,10 +22,15 @@ class ShallowVPTVisualEncoder(nn.Module):
         self.visual = visual
         self.n_vctx = int(n_vctx)
         self.prompt_depth = int(prompt_depth)
+        self.prompt_position = str(prompt_position).lower()
         if self.n_vctx <= 0:
             raise ValueError(f"n_vctx must be positive, got {n_vctx}")
         if self.prompt_depth <= 0:
             raise ValueError(f"prompt_depth must be positive, got {prompt_depth}")
+        if self.prompt_position not in {"append", "insert"}:
+            raise ValueError(
+                f"prompt_position must be 'append' or 'insert', got {prompt_position}"
+            )
         if self.prompt_depth > len(self.visual.transformer.resblocks):
             raise ValueError(
                 f"prompt_depth={prompt_depth} exceeds visual depth "
@@ -32,6 +44,21 @@ class ShallowVPTVisualEncoder(nn.Module):
     @property
     def dtype(self):
         return self.visual.conv1.weight.dtype
+
+    def _add_prompt_bld(self, tokens, prompt):
+        if self.prompt_position == "append":
+            return torch.cat([tokens, prompt], dim=1)
+        return torch.cat([tokens[:, :1], prompt, tokens[:, 1:]], dim=1)
+
+    def _strip_prompt_lbd(self, tokens, base_len):
+        if self.prompt_position == "append":
+            return tokens[:base_len]
+        return torch.cat([tokens[:1], tokens[1 + self.n_vctx:]], dim=0)
+
+    def _add_prompt_lbd(self, tokens, prompt):
+        if self.prompt_position == "append":
+            return torch.cat([tokens, prompt], dim=0)
+        return torch.cat([tokens[:1], prompt, tokens[1:]], dim=0)
 
     def forward(self, image):
         x = self.visual.conv1(image.type(self.dtype))
@@ -48,7 +75,7 @@ class ShallowVPTVisualEncoder(nn.Module):
         base_len = x.shape[1]
         visual_ctx = self.vctx[0].unsqueeze(0).expand(x.shape[0], -1, -1)
         visual_ctx = visual_ctx.to(dtype=x.dtype, device=x.device)
-        x = torch.cat([x, visual_ctx], dim=1)
+        x = self._add_prompt_bld(x, visual_ctx)
 
         x = self.visual.ln_pre(x)
         x = x.permute(1, 0, 2)
@@ -56,11 +83,11 @@ class ShallowVPTVisualEncoder(nn.Module):
         batch_size = x.shape[1]
         for layer_idx, block in enumerate(self.visual.transformer.resblocks, start=1):
             if 1 < layer_idx <= self.prompt_depth:
-                x = x[:base_len]
+                x = self._strip_prompt_lbd(x, base_len)
                 visual_ctx = self.vctx[layer_idx - 1].to(dtype=x.dtype, device=x.device)
                 visual_ctx = visual_ctx.unsqueeze(0).expand(batch_size, -1, -1)
                 visual_ctx = visual_ctx.permute(1, 0, 2)
-                x = torch.cat([x, visual_ctx], dim=0)
+                x = self._add_prompt_lbd(x, visual_ctx)
 
             x = block(x)
 
