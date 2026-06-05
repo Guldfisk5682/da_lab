@@ -63,6 +63,18 @@ image
   -> append mode: [persistent VCTX, beta * instance tokens]
 ```
 
+Target information maximization:
+
+```text
+source batch -> CE loss
+target batches -> sample entropy minimization + class-balance KL
+loss = source CE + lambda_ent * loss_ent + lambda_div * loss_div
+```
+
+This path intentionally adds no new prompt structure. Use it to test whether
+target-side objectives can move the strong CoCoOpVPTMTDA baseline before adding
+domain-specific prompt banks or other modules.
+
 维护约定：
 
 - 新主线新增独立 trainer/config/script，不要改坏 `trainers/cocoop.py`。
@@ -141,6 +153,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-06-04: Added `scripts/style_prompt_mtda/run_seed23_cocoop_vpt.sh` for uninterrupted seed2/3 runs of `CoCoOpMTDA` and `cocoop_vpt_ctx8_d1`, and upgraded `collect_officehome_results.py` to support multi-seed mean/std summaries.
 - 2026-06-05: Added an optional domain-text guided visual context residual to `CoCoOpVPTMTDA`. This uses target domain names encoded by CLIP text features to generate a visual prompt residual with `gamma=0` initialization. It is distinct from the deprecated style-statistics-to-text-prompt route.
 - 2026-06-05: Removed the failed `insert` and domain-text residual paths from the active `CoCoOpVPTMTDA` entry. Added optional ViaPT-style instance-aware PVC: each image uses detached early patch tokens before CLIP ViT block 1, then `InstanceVCTXGenerator` predicts mean/log_std and samples per-image VCTX tokens with learnable `beta=0` initialization. `INSTANCE_AWARE.MODE=residual` adds them to shared VCTX, while `MODE=append` appends them after shared VCTX. Training still uses source CE only.
+- 2026-06-05: Added optional `TARGET_IM` to `CoCoOpVPTMTDA`. This keeps the VCTX structure unchanged and uses unlabeled target batches through sample entropy minimization plus class-balance KL. The default is disabled so existing CoCoOpVPTMTDA/VCTX8 results remain reproducible.
 - 2026-05-30: Created the clean research branch `ss-mtda-style-prompt` and switched the active path away from `Office-31 / V0 / V1 / legacy-GSPA`.
 - 2026-05-30: Archived the old experimental routes into `archive/v0_v1_ablation/` and `archive/legacy_gspa/`, keeping the original `CoOp / CoCoOp` baseline trainers active in the main tree.
 - 2026-05-30: Added `OfficeHomeMTDA` for source-available closed-set single-source multi-target adaptation, with one labeled source domain and three unlabeled target domains per run.

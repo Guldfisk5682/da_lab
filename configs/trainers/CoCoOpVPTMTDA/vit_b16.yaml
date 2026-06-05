@@ -52,6 +52,11 @@ TRAINER:
       LOG_STD_MIN: -5.0
       LOG_STD_MAX: 2.0
       FIXED_EVAL_SEED: 0
+    TARGET_IM:
+      ENABLED: false
+      LAMBDA_ENT: 0.0
+      LAMBDA_DIV: 0.0
+      EPS: 1e-6
     DEBUG:
       PRINT_ONCE: false
   STYLE_PROMPT:

@@ -36,6 +36,11 @@ class CustomCLIPVPTMTDA(nn.Module):
         self.dtype = clip_model.dtype
         self.debug_print_once = vpt_cfg.DEBUG.PRINT_ONCE
         self._has_printed_debug = False
+        target_im_cfg = vpt_cfg.TARGET_IM
+        self.target_im_enabled = target_im_cfg.ENABLED
+        self.lambda_ent = float(target_im_cfg.LAMBDA_ENT)
+        self.lambda_div = float(target_im_cfg.LAMBDA_DIV)
+        self.target_im_eps = float(target_im_cfg.EPS)
 
         instance_cfg = vpt_cfg.INSTANCE_AWARE
         self.instance_vctx = None
@@ -95,6 +100,35 @@ class CustomCLIPVPTMTDA(nn.Module):
 
         return torch.stack(logits)
 
+    def _target_im_loss(self, image_u_dict, device):
+        zero = torch.zeros((), device=device)
+        if (
+            not self.target_im_enabled
+            or (self.lambda_ent == 0.0 and self.lambda_div == 0.0)
+            or len(image_u_dict) == 0
+        ):
+            return zero, zero, zero, zero
+
+        probs_list = []
+        for image_u in image_u_dict.values():
+            image_features_u, _, _, _, _ = self._encode_image(image_u)
+            logits_u = self._encode_logits(image_features_u)
+            probs = F.softmax(logits_u.float(), dim=-1)
+            probs_list.append(probs)
+
+        probs_all = torch.cat(probs_list, dim=0)
+        log_probs = torch.log(probs_all.clamp_min(self.target_im_eps))
+        loss_ent = -(probs_all * log_probs).sum(dim=-1).mean()
+
+        mean_probs = probs_all.mean(dim=0)
+        loss_div = (
+            mean_probs * torch.log(mean_probs.clamp_min(self.target_im_eps))
+        ).sum() + mean_probs.new_tensor(float(mean_probs.numel())).log()
+        target_confidence = probs_all.max(dim=-1).values.mean()
+
+        loss_target = self.lambda_ent * loss_ent + self.lambda_div * loss_div
+        return loss_target, loss_ent, loss_div, target_confidence
+
     def _build_debug_snapshot(
         self, image_s, image_u_dict, image_features, logits, loss, vctx_residual
     ):
@@ -112,6 +146,9 @@ class CustomCLIPVPTMTDA(nn.Module):
         print("vision prompt depth:", self.image_encoder.prompt_depth)
         print("vctx position: append")
         print("vctx norm:", float(self.image_encoder.vctx.detach().float().norm().item()))
+        print("target IM enabled:", self.target_im_enabled)
+        print("target IM lambda_ent:", self.lambda_ent)
+        print("target IM lambda_div:", self.lambda_div)
         print("instance aware enabled:", self.instance_vctx is not None)
         if self.instance_vctx is not None:
             instance_tokens = vctx_residual["tokens"]
@@ -151,8 +188,12 @@ class CustomCLIPVPTMTDA(nn.Module):
         self._last_instance_std = residual_std
         logits = self._encode_logits(image_features)
         loss_ce = F.cross_entropy(logits, label_s)
+        loss_target, loss_ent, loss_div, target_confidence = self._target_im_loss(
+            image_u_dict, loss_ce.device
+        )
+        loss_total = loss_ce + loss_target
         self._build_debug_snapshot(
-            image_s, image_u_dict, image_features, logits, loss_ce, vctx_residual
+            image_s, image_u_dict, image_features, logits, loss_total, vctx_residual
         )
 
         acc = compute_accuracy(logits, label_s)[0].item()
@@ -170,8 +211,12 @@ class CustomCLIPVPTMTDA(nn.Module):
             instance_std_mean = residual_std.detach().float().mean()
 
         return {
-            "loss": loss_ce,
+            "loss": loss_total,
             "loss_ce": loss_ce.detach(),
+            "loss_target": loss_target.detach(),
+            "loss_ent": loss_ent.detach(),
+            "loss_div": loss_div.detach(),
+            "target_confidence": target_confidence.detach(),
             "acc_src": torch.tensor(acc, device=loss_ce.device),
             "vctx_norm": self.image_encoder.vctx.detach().float().norm(),
             "instance_beta": instance_beta,
@@ -204,6 +249,9 @@ class CoCoOpVPTMTDA(MultiTargetTrainerXU):
             "residual",
             "append",
         ]
+        assert cfg.TRAINER.COCOOP_VPT_MTDA.TARGET_IM.LAMBDA_ENT >= 0.0
+        assert cfg.TRAINER.COCOOP_VPT_MTDA.TARGET_IM.LAMBDA_DIV >= 0.0
+        assert cfg.TRAINER.COCOOP_VPT_MTDA.TARGET_IM.EPS > 0.0
 
     def build_model(self):
         cfg = self.cfg

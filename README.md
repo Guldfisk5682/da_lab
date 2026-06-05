@@ -217,6 +217,22 @@ early patch tokens E0
 -> append: [shared VCTX, beta * instance tokens]
 ```
 
+如果只想验证 target objective 是否能推动当前最好的 VCTX8，不新增任何 prompt 结构，可以开启 target information maximization：
+
+```bash
+METHOD_TAG=cocoop_vpt_ctx8_target_im \
+EXTRA_OPTS="TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1 TRAINER.COCOOP_VPT_MTDA.TARGET_IM.ENABLED True TRAINER.COCOOP_VPT_MTDA.TARGET_IM.LAMBDA_ENT 0.1 TRAINER.COCOOP_VPT_MTDA.TARGET_IM.LAMBDA_DIV 0.1" \
+bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
+```
+
+该 loss 仍然不使用 target labels：
+
+```text
+loss = source CE
+     + lambda_ent * target sample entropy
+     + lambda_div * target class-balance KL
+```
+
 结果汇总：
 
 ```bash
