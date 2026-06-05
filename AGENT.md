@@ -22,7 +22,7 @@ Protocol: source-available closed-set SS-MTDA
 Backbone: CLIP ViT-B/16
 Base method: CoCoOp / CoCoOpMTDA
 New method: CoCoOpVPTMTDA
-Core idea: CoCoOp text prompt learning + depth-configurable visual prompt tuning
+Core idea: CoCoOp text prompt learning + persistent visual context tokens
 ```
 
 新方向要求：
@@ -32,7 +32,7 @@ Core idea: CoCoOp text prompt learning + depth-configurable visual prompt tuning
 3. 保持原始 `CoOp / CoCoOp` trainer 可用。
 4. `StylePromptMTDA` 已被判定为收益微弱的历史实验，不要继续堆新结构。
 5. 新增实验优先围绕 `OfficeHomeMTDA -> CoCoOpMTDA -> CoCoOpVPTMTDA` 这条主路径展开。
-6. VPT 只训练 `prompt_learner.*` 和 `image_encoder.vctx`，冻结 CLIP 主体。
+6. VPT 只训练 `prompt_learner.*`、`image_encoder.vctx`，以及开启时的 `instance_vctx.*`，冻结 CLIP 主体。
 7. 本地只做 `train.py --help`、synthetic smoke test、脚本与日志结构验证。
 
 `CoCoOpVPTMTDA` 结构：
@@ -41,7 +41,7 @@ Core idea: CoCoOp text prompt learning + depth-configurable visual prompt tuning
 image
   -> patch embedding
   -> [CLS + patch tokens]
-  -> VCTX_POSITION controls append vs insert after CLS
+  -> append persistent visual context tokens after patch tokens
   -> for blocks 1..VISION_PROMPT_DEPTH:
        replace visual prompt tokens with vctx[layer]
        run frozen CLIP ViT block
@@ -50,14 +50,26 @@ image
   -> source CE loss
 ```
 
+Instance-aware PVC residual:
+
+```text
+image
+  -> early patch tokens before CLIP ViT block 1
+  -> Conv1x1 + GELU + Conv3x3 + GELU + AvgPool
+  -> mean/log_std for a per-image residual distribution
+  -> InstanceVCTXGenerator
+  -> per-image visual prompt residual
+  -> persistent VCTX + beta * residual
+```
+
 维护约定：
 
 - 新主线新增独立 trainer/config/script，不要改坏 `trainers/cocoop.py`。
 - `StylePromptMTDA` 可以继续保留用于复现实验表，但不再作为默认方法。
 - 新方法输出目录必须和历史方法分开，例如 `output/office_home_mtda/cocoop_vpt/...`。
 - VPT 超参扫描使用 `METHOD_TAG` 分目录，例如 `cocoop_vpt_ctx4_d3`。
-- 使用 `TRAINER.COCOOP_VPT_MTDA.VCTX_POSITION append|insert` 做 prompt position 消融。
-- 如果后续要做 MaPLe-style coupling，先保留 `CoCoOpVPTMTDA` 作为 independent VPT baseline。
+- `insert` prompt position 和 domain-text guided visual residual 已经在实验中表现不佳，不要继续作为主线维护。
+- 如果后续要做 MaPLe-style coupling，先保留 `CoCoOpVPTMTDA` 作为 persistent VCTX baseline。
 
 ## Project Mission
 
@@ -127,6 +139,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-06-04: Added `VCTX_POSITION` for visual prompt position ablation. `append` keeps the current persistent VCTX path after patch tokens, while `insert` places VCTX between CLS and patch tokens.
 - 2026-06-04: Added `scripts/style_prompt_mtda/run_seed23_cocoop_vpt.sh` for uninterrupted seed2/3 runs of `CoCoOpMTDA` and `cocoop_vpt_ctx8_d1`, and upgraded `collect_officehome_results.py` to support multi-seed mean/std summaries.
 - 2026-06-05: Added an optional domain-text guided visual context residual to `CoCoOpVPTMTDA`. This uses target domain names encoded by CLIP text features to generate a visual prompt residual with `gamma=0` initialization. It is distinct from the deprecated style-statistics-to-text-prompt route.
+- 2026-06-05: Removed the failed `insert` and domain-text residual paths from the active `CoCoOpVPTMTDA` entry. Added optional ViaPT-style instance-aware PVC residual: each image uses detached early patch tokens before CLIP ViT block 1, then `InstanceVCTXGenerator` predicts mean/log_std and samples a per-image VCTX residual with learnable `beta=0` initialization. Training still uses source CE only.
 - 2026-05-30: Created the clean research branch `ss-mtda-style-prompt` and switched the active path away from `Office-31 / V0 / V1 / legacy-GSPA`.
 - 2026-05-30: Archived the old experimental routes into `archive/v0_v1_ablation/` and `archive/legacy_gspa/`, keeping the original `CoOp / CoCoOp` baseline trainers active in the main tree.
 - 2026-05-30: Added `OfficeHomeMTDA` for source-available closed-set single-source multi-target adaptation, with one labeled source domain and three unlabeled target domains per run.

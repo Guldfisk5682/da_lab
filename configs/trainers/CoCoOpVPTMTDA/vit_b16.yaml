@@ -43,13 +43,14 @@ TRAINER:
     N_VCTX: 4
     VCTX_INIT_STD: 0.02
     VISION_PROMPT_DEPTH: 1
-    VCTX_POSITION: "append"
-    DOMAIN_AWARE:
+    INSTANCE_AWARE:
       ENABLED: false
-      TEXT_TEMPLATE: "a {domain} image."
       HIDDEN_DIM: 512
-      GAMMA_INIT: 0.0
-      GAMMA_LEARNABLE: true
+      BETA_INIT: 0.0
+      BETA_LEARNABLE: true
+      LOG_STD_MIN: -5.0
+      LOG_STD_MAX: 2.0
+      FIXED_EVAL_SEED: 0
     DEBUG:
       PRINT_ONCE: false
   STYLE_PROMPT:

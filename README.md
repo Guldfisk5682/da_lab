@@ -2,7 +2,7 @@
 
 当前活跃方向是 `Office-Home` 的 source-available closed-set SS-MTDA。
 
-当前主线方法是 `CoCoOpVPTMTDA`：在 `CoCoOpMTDA` 基础上加入 independent visual prompt tuning，并支持通过 `VISION_PROMPT_DEPTH` 调整 shallow/deep VPT。`StylePromptMTDA` 已保留为历史实验，不再作为默认扩展方向。
+当前主线方法是 `CoCoOpVPTMTDA`：在 `CoCoOpMTDA` 基础上加入 persistent visual context tokens，并支持可选的 ViaPT-style instance-aware PVC residual。`StylePromptMTDA` 已保留为历史实验，不再作为默认扩展方向。
 
 ## 环境准备
 
@@ -175,8 +175,6 @@ bash scripts/style_prompt_mtda/run_officehome_all.sh style_prompt
 VPT 超参扫描建议用 `METHOD_TAG` 分开输出目录，避免覆盖或 resume 到旧实验：
 
 ```bash
-export EXTRA_OPTS="DATALOADER.TRAIN_X.BATCH_SIZE 2 DATALOADER.TRAIN_U.BATCH_SIZE 2"
-
 METHOD_TAG=cocoop_vpt_ctx4_d1 \
 EXTRA_OPTS="${EXTRA_OPTS} TRAINER.COCOOP_VPT_MTDA.N_VCTX 4 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1" \
 bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
@@ -190,25 +188,23 @@ EXTRA_OPTS="${EXTRA_OPTS} TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MT
 bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
 ```
 
-如果要比较 visual context token 位置，可以把默认 `append` 改成 `insert`：
+Instance-aware PVC residual 使用进入 ViT block 前的早期 patch tokens 为每张图生成视觉 prompt residual，`BETA_INIT=0.0`，训练初始严格等价于当前 persistent VCTX：
 
 ```bash
-export EXTRA_OPTS="DATALOADER.TRAIN_X.BATCH_SIZE 2 DATALOADER.TRAIN_U.BATCH_SIZE 2"
-
-METHOD_TAG=cocoop_vpt_insert_ctx8_d1 \
-EXTRA_OPTS="${EXTRA_OPTS} TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1 TRAINER.COCOOP_VPT_MTDA.VCTX_POSITION insert" \
+METHOD_TAG=cocoop_vpt_ctx8_d1_instance \
+EXTRA_OPTS="TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1 TRAINER.COCOOP_VPT_MTDA.INSTANCE_AWARE.ENABLED True" \
 bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
 ```
 
-如果要测试 domain-text guided visual context residual：
+该模块的生成路径是：
 
-```bash
-METHOD_TAG=cocoop_vpt_ctx8_d1_domain_text \
-EXTRA_OPTS="TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1 TRAINER.COCOOP_VPT_MTDA.VCTX_POSITION append TRAINER.COCOOP_VPT_MTDA.DOMAIN_AWARE.ENABLED True" \
-bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
+```text
+early patch tokens E0
+-> Conv1x1 + GELU + Conv3x3 + GELU + AvgPool
+-> Linear predicts mean/log_std
+-> reparameterized instance residual
+-> shared persistent VCTX + beta * residual
 ```
-
-该分支使用 target domain names 生成 visual prompt residual，`GAMMA_INIT=0.0`，因此训练初始严格等价于当前 persistent VCTX。
 
 结果汇总：
 
