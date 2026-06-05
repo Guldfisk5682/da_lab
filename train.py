@@ -30,6 +30,7 @@ import trainers.coop
 import trainers.cocoop
 import trainers.cocoop_mtda
 import trainers.cocoop_vpt_mtda
+import trainers.clip_vpt_mtda
 import trainers.style_prompt_mtda
 import trainers.zsclip
 
@@ -131,6 +132,15 @@ def extend_cfg(cfg):
     cfg.TRAINER.COCOOP_VPT_MTDA.TARGET_IM.EPS = 1e-6
     cfg.TRAINER.COCOOP_VPT_MTDA.DEBUG = CN()
     cfg.TRAINER.COCOOP_VPT_MTDA.DEBUG.PRINT_ONCE = False
+
+    cfg.TRAINER.CLIP_VPT_MTDA = CN()
+    cfg.TRAINER.CLIP_VPT_MTDA.PREC = "fp16"
+    cfg.TRAINER.CLIP_VPT_MTDA.ENABLE_VPT = False
+    cfg.TRAINER.CLIP_VPT_MTDA.N_VCTX = 8
+    cfg.TRAINER.CLIP_VPT_MTDA.VCTX_INIT_STD = 0.02
+    cfg.TRAINER.CLIP_VPT_MTDA.PROMPT_TEMPLATE = "a photo of a {}."
+    cfg.TRAINER.CLIP_VPT_MTDA.DEBUG = CN()
+    cfg.TRAINER.CLIP_VPT_MTDA.DEBUG.PRINT_ONCE = False
 
     cfg.TRAINER.STYLE_PROMPT_MTDA = CN()
     cfg.TRAINER.STYLE_PROMPT_MTDA.PREC = "fp16"

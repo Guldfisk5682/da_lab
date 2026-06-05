@@ -5,7 +5,7 @@
 当前活跃研究分支已切换为：
 
 ```text
-cocoop-vpt-mtda
+clip-vpt-mtda
 ```
 
 当前主线目标不再是 `Office-31 / V0 / V1 / legacy-GSPA / StylePromptMTDA`。
@@ -20,9 +20,10 @@ cocoop-vpt-mtda
 Dataset: Office-Home
 Protocol: source-available closed-set SS-MTDA
 Backbone: CLIP ViT-B/16
-Base method: CoCoOp / CoCoOpMTDA
-New method: CoCoOpVPTMTDA
-Core idea: CoCoOp text prompt learning + persistent visual context tokens
+Base method: frozen CLIP zero-shot
+New method: CLIPVPTMTDA
+Core idea: first test whether persistent visual context tokens help plain CLIP,
+before returning to AD-CLIP-style multi-layer prompt adaptation.
 ```
 
 新方向要求：
@@ -30,10 +31,35 @@ Core idea: CoCoOp text prompt learning + persistent visual context tokens
 1. 不下载真实数据集或模型权重，除非用户明确要求并且在远程服务器执行。
 2. 不再把 hidden-state style swap / gate / last3 tuning 作为默认方法。
 3. 保持原始 `CoOp / CoCoOp` trainer 可用。
-4. `StylePromptMTDA` 已被判定为收益微弱的历史实验，不要继续堆新结构。
-5. 新增实验优先围绕 `OfficeHomeMTDA -> CoCoOpMTDA -> CoCoOpVPTMTDA` 这条主路径展开。
-6. VPT 只训练 `prompt_learner.*`、`image_encoder.vctx`，以及开启时的 `instance_vctx.*`，冻结 CLIP 主体。
+4. `StylePromptMTDA` 和 CoCoOp 上的 instance/domain-text/target-IM 扩展已被判定为收益不足的历史实验，不要继续堆新结构。
+5. 新增实验优先围绕 `OfficeHomeMTDA -> CLIPVPTMTDA` 这条主路径展开。
+6. `CLIPVPTMTDA` 的 B0 为 frozen CLIP zero-shot；B1 只训练 `image_encoder.vctx`，冻结 CLIP 主体和固定 zero-shot text prompts。
 7. 本地只做 `train.py --help`、synthetic smoke test、脚本与日志结构验证。
+
+`CLIPVPTMTDA` B0/B1:
+
+```text
+B0:
+  image -> frozen CLIP visual encoder
+  text  -> fixed "a photo of a {class}." prompts
+  eval only
+
+B1:
+  image -> [CLS + patch tokens + persistent VCTX]
+  frozen CLIP visual transformer
+  fixed zero-shot text prompts
+  source CE trains only VCTX
+```
+
+Entrypoints:
+
+```bash
+bash scripts/clip_vpt_mtda/run_officehome_all.sh clip_zs
+bash scripts/clip_vpt_mtda/run_officehome_all.sh clip_vpt
+python scripts/clip_vpt_mtda/collect_officehome_results.py
+```
+
+上一阶段 `CoCoOpVPTMTDA` 仍保留为强基线/负结果参考：
 
 `CoCoOpVPTMTDA` 结构：
 
@@ -144,6 +170,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 
 ## Work Log
 
+- 2026-06-05: Merged `cocoop-vpt-mtda` into `main`, then opened `clip-vpt-mtda` for the CLIP-first reset. Added `CLIPVPTMTDA` B0/B1: B0 evaluates frozen zero-shot CLIP on Office-Home SS-MTDA, while B1 trains only persistent appended VCTX on top of frozen CLIP with fixed text prompts.
 - 2026-06-03: Merged `ss-mtda-style-prompt` into `main` as infrastructure, then opened `cocoop-vpt-mtda` for the new multi-prompt DA direction. The merge keeps Office-Home MTDA dataloading, `CoCoOpMTDA`, Office-Home download/verify scripts, result collection, and server CUDA fixes.
 - 2026-06-03: Marked `StylePromptMTDA` as a deprecated negative-result path. Experiments showed pure text-side target-style prompt modulation gives only tiny and unstable gains over `CoCoOpMTDA`, so future work should not keep tuning style queue/domain-mean prompt bias.
 - 2026-06-03: Added the first new active method, `CoCoOpVPTMTDA`: CoCoOp text prompt learning plus an independent shallow visual prompt tensor appended to CLIP ViT tokens. This is the first multi-prompt tuning DA experiment and should be compared against `CoCoOpMTDA`.

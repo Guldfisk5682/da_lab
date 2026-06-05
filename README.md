@@ -2,7 +2,7 @@
 
 当前活跃方向是 `Office-Home` 的 source-available closed-set SS-MTDA。
 
-当前主线方法是 `CoCoOpVPTMTDA`：在 `CoCoOpMTDA` 基础上加入 persistent visual context tokens，并支持可选的 ViaPT-style instance-aware PVC residual。`StylePromptMTDA` 已保留为历史实验，不再作为默认扩展方向。
+当前主线已切换到 `CLIPVPTMTDA`：先脱离 CoCoOp，评测 frozen CLIP zero-shot 和 CLIP + persistent VCTX 在 SS-MTDA 上的表现。`CoCoOpVPTMTDA` 保留为上一阶段强基线与负结果参考。
 
 ## 环境准备
 
@@ -26,13 +26,19 @@ pip install -r requirements.txt
 - `trainers/cocoop.py`
 - `trainers/cocoop_mtda.py`
 - `trainers/cocoop_vpt_mtda.py`
+- `trainers/clip_vpt_mtda.py`
 - `trainers/style_prompt_mtda.py`
+- `models/clip_vpt.py`
 - `models/visual_prompt.py`
 - `datasets/office_home_mtda.py`
 - `configs/datasets/office_home_mtda.yaml`
 - `configs/trainers/CoCoOpMTDA/vit_b16.yaml`
 - `configs/trainers/CoCoOpVPTMTDA/vit_b16.yaml`
+- `configs/trainers/CLIPVPTMTDA/vit_b16.yaml`
 - `configs/trainers/StylePromptMTDA/vit_b16.yaml`
+- `scripts/clip_vpt_mtda/run_officehome_one.sh`
+- `scripts/clip_vpt_mtda/run_officehome_all.sh`
+- `scripts/clip_vpt_mtda/collect_officehome_results.py`
 - `scripts/style_prompt_mtda/run_officehome_one.sh`
 - `scripts/style_prompt_mtda/run_officehome_all.sh`
 - `scripts/style_prompt_mtda/collect_officehome_results.py`
@@ -147,6 +153,35 @@ DATA_ROOT/
 脚本会自动把官方常见原始结构里的 `Art/Clipart/Product/Real World/images/...` 整理成上面的 `office_home/...` 结构。
 
 ## Office-Home MTDA 训练入口
+
+当前新阶段优先跑 CLIP-first B0/B1。
+
+B0: frozen CLIP zero-shot，仅评测：
+
+```bash
+bash scripts/clip_vpt_mtda/run_officehome_all.sh clip_zs
+```
+
+B1: CLIP + persistent VCTX，只训练视觉 context tokens：
+
+```bash
+bash scripts/clip_vpt_mtda/run_officehome_all.sh clip_vpt
+```
+
+单个 source smoke test：
+
+```bash
+bash scripts/clip_vpt_mtda/run_officehome_one.sh A 1 clip_zs --debug
+bash scripts/clip_vpt_mtda/run_officehome_one.sh A 1 clip_vpt --debug
+```
+
+CLIP-first 结果汇总：
+
+```bash
+python scripts/clip_vpt_mtda/collect_officehome_results.py
+```
+
+上一阶段 CoCoOp/StylePrompt/VPT 入口如下，主要用于对照历史结果。
 
 单个 source：
 
