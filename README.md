@@ -188,11 +188,21 @@ EXTRA_OPTS="${EXTRA_OPTS} TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MT
 bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
 ```
 
-Instance-aware PVC residual 使用进入 ViT block 前的早期 patch tokens 为每张图生成视觉 prompt residual，`BETA_INIT=0.0`，训练初始严格等价于当前 persistent VCTX：
+Instance-aware PVC 使用进入 ViT block 前的早期 patch tokens 为每张图生成视觉 prompt tokens，`BETA_INIT=0.0`，训练初始严格等价于当前 persistent VCTX。
+
+`residual` 模式把 instance tokens 加到 shared VCTX 上：
 
 ```bash
-METHOD_TAG=cocoop_vpt_ctx8_d1_instance \
-EXTRA_OPTS="TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1 TRAINER.COCOOP_VPT_MTDA.INSTANCE_AWARE.ENABLED True" \
+METHOD_TAG=cocoop_vpt_ctx8_instance_residual \
+EXTRA_OPTS="TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1 TRAINER.COCOOP_VPT_MTDA.INSTANCE_AWARE.ENABLED True TRAINER.COCOOP_VPT_MTDA.INSTANCE_AWARE.MODE residual" \
+bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
+```
+
+`append` 模式把 instance tokens 追加在 shared VCTX 后面，更接近 ViaPT 的 prompt token 分工：
+
+```bash
+METHOD_TAG=cocoop_vpt_ctx8_instance_append \
+EXTRA_OPTS="TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1 TRAINER.COCOOP_VPT_MTDA.INSTANCE_AWARE.ENABLED True TRAINER.COCOOP_VPT_MTDA.INSTANCE_AWARE.MODE append" \
 bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
 ```
 
@@ -202,8 +212,9 @@ bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
 early patch tokens E0
 -> Conv1x1 + GELU + Conv3x3 + GELU + AvgPool
 -> Linear predicts mean/log_std
--> reparameterized instance residual
--> shared persistent VCTX + beta * residual
+-> reparameterized instance tokens
+-> residual: shared VCTX + beta * instance tokens
+-> append: [shared VCTX, beta * instance tokens]
 ```
 
 结果汇总：

@@ -18,6 +18,7 @@ class InstanceVCTXGenerator(nn.Module):
         log_std_min=-5.0,
         log_std_max=2.0,
         fixed_eval_seed=0,
+        mode="residual",
     ):
         super().__init__()
         self.prompt_depth = int(prompt_depth)
@@ -25,6 +26,9 @@ class InstanceVCTXGenerator(nn.Module):
         self.vision_dim = int(vision_dim)
         self.log_std_min = float(log_std_min)
         self.log_std_max = float(log_std_max)
+        self.mode = str(mode).lower()
+        if self.mode not in {"residual", "append"}:
+            raise ValueError(f"Unsupported instance mode: {mode}")
 
         hidden_dim = int(hidden_dim)
         if hidden_dim <= 0:
@@ -127,28 +131,55 @@ class ShallowVPTVisualEncoder(nn.Module):
     def _add_prompt_bld(self, tokens, prompt):
         return torch.cat([tokens, prompt], dim=1)
 
-    def _strip_prompt_lbd(self, tokens, base_len):
+    def _strip_prompt_lbd(self, tokens, base_len, prompt_len):
+        del prompt_len
         return tokens[:base_len]
 
     def _add_prompt_lbd(self, tokens, prompt):
         return torch.cat([tokens, prompt], dim=0)
 
+    def _split_instance_prompt(self, vctx_residual):
+        if isinstance(vctx_residual, dict):
+            mode = vctx_residual.get("mode", "residual")
+            residual = vctx_residual.get("tokens")
+        else:
+            mode = "residual"
+            residual = vctx_residual
+        return mode, residual
+
     def _prompt_tokens(self, layer_idx, batch_size, dtype, device, vctx_residual=None):
+        mode, residual = self._split_instance_prompt(vctx_residual)
         prompt = self.vctx[layer_idx]
-        if vctx_residual is not None:
-            if vctx_residual.dim() == 3:
-                prompt = prompt + vctx_residual[layer_idx].to(device=prompt.device)
-            elif vctx_residual.dim() == 4:
-                residual = vctx_residual[:, layer_idx].to(device=prompt.device)
-                prompt = prompt.unsqueeze(0) + residual
+        append_prompt = None
+
+        if residual is not None:
+            if residual.dim() == 3:
+                residual_i = residual[layer_idx].to(device=prompt.device)
+            elif residual.dim() == 4:
+                residual_i = residual[:, layer_idx].to(device=prompt.device)
             else:
-                raise ValueError(
-                    "vctx_residual must have shape [D, N, C] or [B, D, N, C]"
-                )
+                raise ValueError("instance tokens must have shape [D,N,C] or [B,D,N,C]")
+
+            if mode == "residual":
+                if residual_i.dim() == 2:
+                    prompt = prompt + residual_i
+                else:
+                    prompt = prompt.unsqueeze(0) + residual_i
+            elif mode == "append":
+                append_prompt = residual_i
+            else:
+                raise ValueError(f"Unsupported instance mode: {mode}")
 
         prompt = prompt.to(dtype=dtype, device=device)
         if prompt.dim() == 2:
             prompt = prompt.unsqueeze(0).expand(batch_size, -1, -1)
+
+        if append_prompt is not None:
+            append_prompt = append_prompt.to(dtype=dtype, device=device)
+            if append_prompt.dim() == 2:
+                append_prompt = append_prompt.unsqueeze(0).expand(batch_size, -1, -1)
+            prompt = torch.cat([prompt, append_prompt], dim=1)
+
         return prompt
 
     def extract_early_patch_tokens(self, image):
@@ -188,7 +219,8 @@ class ShallowVPTVisualEncoder(nn.Module):
 
         for layer_idx, block in enumerate(self.visual.transformer.resblocks, start=1):
             if 1 < layer_idx <= self.prompt_depth:
-                x = self._strip_prompt_lbd(x, base_len)
+                prompt_len = x.shape[0] - base_len
+                x = self._strip_prompt_lbd(x, base_len, prompt_len)
                 visual_ctx = self._prompt_tokens(
                     layer_idx - 1, batch_size, x.dtype, x.device, vctx_residual
                 )

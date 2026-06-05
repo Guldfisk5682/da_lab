@@ -39,6 +39,7 @@ class CustomCLIPVPTMTDA(nn.Module):
 
         instance_cfg = vpt_cfg.INSTANCE_AWARE
         self.instance_vctx = None
+        self.instance_mode = str(instance_cfg.MODE).lower()
         if instance_cfg.ENABLED:
             self.instance_vctx = InstanceVCTXGenerator(
                 prompt_depth=self.image_encoder.prompt_depth,
@@ -50,6 +51,7 @@ class CustomCLIPVPTMTDA(nn.Module):
                 log_std_min=instance_cfg.LOG_STD_MIN,
                 log_std_max=instance_cfg.LOG_STD_MAX,
                 fixed_eval_seed=instance_cfg.FIXED_EVAL_SEED,
+                mode=self.instance_mode,
             )
 
     def _instance_residual(self, image):
@@ -62,7 +64,8 @@ class CustomCLIPVPTMTDA(nn.Module):
             ).detach()
 
         residual, mean, std = self.instance_vctx(patch_tokens)
-        return residual, patch_tokens, mean, std
+        instance_prompt = {"mode": self.instance_mode, "tokens": residual}
+        return instance_prompt, patch_tokens, mean, std
 
     def _encode_image(self, image):
         vctx_residual, patch_tokens, residual_mean, residual_std = (
@@ -111,14 +114,16 @@ class CustomCLIPVPTMTDA(nn.Module):
         print("vctx norm:", float(self.image_encoder.vctx.detach().float().norm().item()))
         print("instance aware enabled:", self.instance_vctx is not None)
         if self.instance_vctx is not None:
+            instance_tokens = vctx_residual["tokens"]
+            print("instance mode:", self.instance_mode)
             print(
                 "instance beta:",
                 float(self.instance_vctx.beta.detach().float().item()),
             )
-            print("instance residual shape:", tuple(vctx_residual.shape))
+            print("instance tokens shape:", tuple(instance_tokens.shape))
             print(
-                "instance residual norm:",
-                float(vctx_residual.detach().float().norm().item()),
+                "instance tokens norm:",
+                float(instance_tokens.detach().float().norm().item()),
             )
             print(
                 "instance residual mean norm:",
@@ -157,8 +162,9 @@ class CustomCLIPVPTMTDA(nn.Module):
         instance_mean_norm = torch.zeros((), device=loss_ce.device)
         instance_std_mean = torch.zeros((), device=loss_ce.device)
         if self.instance_vctx is not None:
+            instance_tokens = vctx_residual["tokens"]
             instance_beta = self.instance_vctx.beta.detach().float()
-            instance_residual_norm = vctx_residual.detach().float().norm()
+            instance_residual_norm = instance_tokens.detach().float().norm()
             instance_patch_norm = patch_tokens.detach().float().norm(dim=-1).mean()
             instance_mean_norm = residual_mean.detach().float().norm()
             instance_std_mean = residual_std.detach().float().mean()
@@ -194,6 +200,10 @@ class CoCoOpVPTMTDA(MultiTargetTrainerXU):
         assert cfg.TRAINER.COCOOP_VPT_MTDA.INSTANCE_AWARE.LOG_STD_MIN <= (
             cfg.TRAINER.COCOOP_VPT_MTDA.INSTANCE_AWARE.LOG_STD_MAX
         )
+        assert cfg.TRAINER.COCOOP_VPT_MTDA.INSTANCE_AWARE.MODE in [
+            "residual",
+            "append",
+        ]
 
     def build_model(self):
         cfg = self.cfg

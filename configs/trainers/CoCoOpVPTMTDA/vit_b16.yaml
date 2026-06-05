@@ -45,6 +45,7 @@ TRAINER:
     VISION_PROMPT_DEPTH: 1
     INSTANCE_AWARE:
       ENABLED: false
+      MODE: "residual"
       HIDDEN_DIM: 512
       BETA_INIT: 0.0
       BETA_LEARNABLE: true

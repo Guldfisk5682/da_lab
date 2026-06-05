@@ -58,8 +58,9 @@ image
   -> Conv1x1 + GELU + Conv3x3 + GELU + AvgPool
   -> mean/log_std for a per-image residual distribution
   -> InstanceVCTXGenerator
-  -> per-image visual prompt residual
-  -> persistent VCTX + beta * residual
+  -> per-image visual prompt tokens
+  -> residual mode: persistent VCTX + beta * instance tokens
+  -> append mode: [persistent VCTX, beta * instance tokens]
 ```
 
 维护约定：
@@ -139,7 +140,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-06-04: Added `VCTX_POSITION` for visual prompt position ablation. `append` keeps the current persistent VCTX path after patch tokens, while `insert` places VCTX between CLS and patch tokens.
 - 2026-06-04: Added `scripts/style_prompt_mtda/run_seed23_cocoop_vpt.sh` for uninterrupted seed2/3 runs of `CoCoOpMTDA` and `cocoop_vpt_ctx8_d1`, and upgraded `collect_officehome_results.py` to support multi-seed mean/std summaries.
 - 2026-06-05: Added an optional domain-text guided visual context residual to `CoCoOpVPTMTDA`. This uses target domain names encoded by CLIP text features to generate a visual prompt residual with `gamma=0` initialization. It is distinct from the deprecated style-statistics-to-text-prompt route.
-- 2026-06-05: Removed the failed `insert` and domain-text residual paths from the active `CoCoOpVPTMTDA` entry. Added optional ViaPT-style instance-aware PVC residual: each image uses detached early patch tokens before CLIP ViT block 1, then `InstanceVCTXGenerator` predicts mean/log_std and samples a per-image VCTX residual with learnable `beta=0` initialization. Training still uses source CE only.
+- 2026-06-05: Removed the failed `insert` and domain-text residual paths from the active `CoCoOpVPTMTDA` entry. Added optional ViaPT-style instance-aware PVC: each image uses detached early patch tokens before CLIP ViT block 1, then `InstanceVCTXGenerator` predicts mean/log_std and samples per-image VCTX tokens with learnable `beta=0` initialization. `INSTANCE_AWARE.MODE=residual` adds them to shared VCTX, while `MODE=append` appends them after shared VCTX. Training still uses source CE only.
 - 2026-05-30: Created the clean research branch `ss-mtda-style-prompt` and switched the active path away from `Office-31 / V0 / V1 / legacy-GSPA`.
 - 2026-05-30: Archived the old experimental routes into `archive/v0_v1_ablation/` and `archive/legacy_gspa/`, keeping the original `CoOp / CoCoOp` baseline trainers active in the main tree.
 - 2026-05-30: Added `OfficeHomeMTDA` for source-available closed-set single-source multi-target adaptation, with one labeled source domain and three unlabeled target domains per run.
