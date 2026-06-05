@@ -26,16 +26,22 @@ pip install -r requirements.txt
 - `trainers/cocoop.py`
 - `trainers/cocoop_mtda.py`
 - `trainers/cocoop_vpt_mtda.py`
+- `trainers/clip_tssp_mtda.py`
 - `trainers/clip_vpt_mtda.py`
 - `trainers/style_prompt_mtda.py`
+- `models/clip_tssp.py`
 - `models/clip_vpt.py`
 - `models/visual_prompt.py`
 - `datasets/office_home_mtda.py`
 - `configs/datasets/office_home_mtda.yaml`
 - `configs/trainers/CoCoOpMTDA/vit_b16.yaml`
 - `configs/trainers/CoCoOpVPTMTDA/vit_b16.yaml`
+- `configs/trainers/CLIPTSSPMTDA/vit_b16.yaml`
 - `configs/trainers/CLIPVPTMTDA/vit_b16.yaml`
 - `configs/trainers/StylePromptMTDA/vit_b16.yaml`
+- `scripts/clip_tssp_mtda/run_officehome_one.sh`
+- `scripts/clip_tssp_mtda/run_officehome_all.sh`
+- `scripts/clip_tssp_mtda/collect_officehome_results.py`
 - `scripts/clip_vpt_mtda/run_officehome_one.sh`
 - `scripts/clip_vpt_mtda/run_officehome_all.sh`
 - `scripts/clip_vpt_mtda/collect_officehome_results.py`
@@ -179,6 +185,33 @@ CLIP-first 结果汇总：
 
 ```bash
 python scripts/clip_vpt_mtda/collect_officehome_results.py
+```
+
+下一阶段 `CLIPTSSPMTDA` 不再使用 VCTX，而是把 frozen CLIP ViT 的 12 层 hidden-state mean/std 映射成 text-side style tokens。
+
+full: source-style tokens + target-set style tokens + target-source gap tokens：
+
+```bash
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_full
+```
+
+no-gap: source-style tokens + target-set style tokens：
+
+```bash
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_no_gap
+```
+
+单个 source smoke test：
+
+```bash
+bash scripts/clip_tssp_mtda/run_officehome_one.sh A 1 clip_tssp_full --debug
+bash scripts/clip_tssp_mtda/run_officehome_one.sh A 1 clip_tssp_no_gap --debug
+```
+
+TSSP 结果汇总：
+
+```bash
+python scripts/clip_tssp_mtda/collect_officehome_results.py
 ```
 
 上一阶段 CoCoOp/StylePrompt/VPT 入口如下，主要用于对照历史结果。

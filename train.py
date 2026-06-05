@@ -30,6 +30,7 @@ import trainers.coop
 import trainers.cocoop
 import trainers.cocoop_mtda
 import trainers.cocoop_vpt_mtda
+import trainers.clip_tssp_mtda
 import trainers.clip_vpt_mtda
 import trainers.style_prompt_mtda
 import trainers.zsclip
@@ -141,6 +142,16 @@ def extend_cfg(cfg):
     cfg.TRAINER.CLIP_VPT_MTDA.PROMPT_TEMPLATE = "a photo of a {}."
     cfg.TRAINER.CLIP_VPT_MTDA.DEBUG = CN()
     cfg.TRAINER.CLIP_VPT_MTDA.DEBUG.PRINT_ONCE = False
+
+    cfg.TRAINER.CLIP_TSSP_MTDA = CN()
+    cfg.TRAINER.CLIP_TSSP_MTDA.PREC = "amp"
+    cfg.TRAINER.CLIP_TSSP_MTDA.HIDDEN_DIM = 512
+    cfg.TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN = True
+    cfg.TRAINER.CLIP_TSSP_MTDA.PROTO_MOMENTUM = 0.9
+    cfg.TRAINER.CLIP_TSSP_MTDA.STYLE_EPS = 1e-6
+    cfg.TRAINER.CLIP_TSSP_MTDA.PROMPT_TEMPLATE = "{}."
+    cfg.TRAINER.CLIP_TSSP_MTDA.DEBUG = CN()
+    cfg.TRAINER.CLIP_TSSP_MTDA.DEBUG.PRINT_ONCE = False
 
     cfg.TRAINER.STYLE_PROMPT_MTDA = CN()
     cfg.TRAINER.STYLE_PROMPT_MTDA.PREC = "fp16"
