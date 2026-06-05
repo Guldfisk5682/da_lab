@@ -200,6 +200,16 @@ EXTRA_OPTS="${EXTRA_OPTS} TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MT
 bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
 ```
 
+如果要测试 domain-text guided visual context residual：
+
+```bash
+METHOD_TAG=cocoop_vpt_ctx8_d1_domain_text \
+EXTRA_OPTS="TRAINER.COCOOP_VPT_MTDA.N_VCTX 8 TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH 1 TRAINER.COCOOP_VPT_MTDA.VCTX_POSITION append TRAINER.COCOOP_VPT_MTDA.DOMAIN_AWARE.ENABLED True" \
+bash scripts/style_prompt_mtda/run_officehome_all.sh cocoop_vpt
+```
+
+该分支使用 target domain names 生成 visual prompt residual，`GAMMA_INIT=0.0`，因此训练初始严格等价于当前 persistent VCTX。
+
 结果汇总：
 
 ```bash

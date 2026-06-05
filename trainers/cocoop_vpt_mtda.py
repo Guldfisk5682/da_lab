@@ -6,12 +6,13 @@ import torch.nn as nn
 from torch.nn import functional as F
 from torch.cuda.amp import GradScaler, autocast
 
+from clip import clip
 from dassl.engine import TRAINER_REGISTRY
 from dassl.metrics import compute_accuracy
 from dassl.optim import build_lr_scheduler, build_optimizer
 from dassl.utils import count_num_param, load_pretrained_weights
 
-from models.visual_prompt import ShallowVPTVisualEncoder
+from models.visual_prompt import DomainTextVCTXGenerator, ShallowVPTVisualEncoder
 from trainers.checkpoint_utils import load_checkpoint_compat
 from trainers.cocoop import PromptLearner, TextEncoder, load_clip_to_cpu
 from trainers.mtda_base import MultiTargetTrainerXU
@@ -33,10 +34,53 @@ class CustomCLIPVPTMTDA(nn.Module):
             prompt_position=vpt_cfg.VCTX_POSITION,
         )
         self.text_encoder = TextEncoder(clip_model)
+        self.token_embedding = clip_model.token_embedding
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
         self.debug_print_once = vpt_cfg.DEBUG.PRINT_ONCE
         self._has_printed_debug = False
+        self.domain_vctx = None
+        self.domain_aware_enabled = vpt_cfg.DOMAIN_AWARE.ENABLED
+        self.domain_hidden_dim = vpt_cfg.DOMAIN_AWARE.HIDDEN_DIM
+        self.domain_gamma_init = vpt_cfg.DOMAIN_AWARE.GAMMA_INIT
+        self.domain_gamma_learnable = vpt_cfg.DOMAIN_AWARE.GAMMA_LEARNABLE
+        self.domain_names = list(cfg.DATASET.TARGET_DOMAINS)
+
+        template = str(vpt_cfg.DOMAIN_AWARE.TEXT_TEMPLATE)
+        prompts = [
+            template.format(domain=domain_name.replace("_", " "))
+            for domain_name in self.domain_names
+        ]
+        self.register_buffer(
+            "domain_tokenized_prompts",
+            torch.cat([clip.tokenize(prompt) for prompt in prompts]),
+        )
+
+    def initialize_domain_vctx(self):
+        if not self.domain_aware_enabled or self.domain_vctx is not None:
+            return
+
+        with torch.no_grad():
+            tokenized = self.domain_tokenized_prompts.to(self.token_embedding.weight.device)
+            embedding = self.token_embedding(tokenized).type(self.dtype)
+            domain_text_features = self.text_encoder(embedding, tokenized).float()
+            domain_text_features = F.normalize(domain_text_features, dim=-1)
+
+        self.domain_vctx = DomainTextVCTXGenerator(
+            domain_names=self.domain_names,
+            domain_text_features=domain_text_features,
+            prompt_depth=self.image_encoder.prompt_depth,
+            n_vctx=self.image_encoder.n_vctx,
+            vision_dim=self.image_encoder.visual.conv1.out_channels,
+            hidden_dim=self.domain_hidden_dim,
+            gamma_init=self.domain_gamma_init,
+            gamma_learnable=self.domain_gamma_learnable,
+        ).to(self.token_embedding.weight.device)
+
+    def _domain_residual(self, domain_names=None):
+        if self.domain_vctx is None:
+            return None
+        return self.domain_vctx(domain_names=domain_names)
 
     def _encode_logits(self, image_features):
         image_features_norm = image_features.float()
@@ -57,7 +101,9 @@ class CustomCLIPVPTMTDA(nn.Module):
 
         return torch.stack(logits)
 
-    def _build_debug_snapshot(self, image_s, image_u_dict, image_features, logits, loss):
+    def _build_debug_snapshot(
+        self, image_s, image_u_dict, image_features, logits, loss, vctx_residual
+    ):
         if not self.debug_print_once or self._has_printed_debug:
             return
 
@@ -72,6 +118,13 @@ class CustomCLIPVPTMTDA(nn.Module):
         print("vision prompt depth:", self.image_encoder.prompt_depth)
         print("vctx position:", self.image_encoder.prompt_position)
         print("vctx norm:", float(self.image_encoder.vctx.detach().float().norm().item()))
+        print("domain aware enabled:", self.domain_vctx is not None)
+        if self.domain_vctx is not None:
+            print("domain gamma:", float(self.domain_vctx.gamma.detach().float().item()))
+            print(
+                "domain residual norm:",
+                float(vctx_residual.detach().float().norm().item()),
+            )
         print("image feature shape:", tuple(image_features.shape))
         print("pi_img shape:", tuple(pi_img.shape))
         print("logits shape:", tuple(logits.shape))
@@ -79,21 +132,33 @@ class CustomCLIPVPTMTDA(nn.Module):
         self._has_printed_debug = True
 
     def forward_train(self, image_s, label_s, image_u_dict):
-        image_features = self.image_encoder(image_s.type(self.dtype))
+        vctx_residual = self._domain_residual(domain_names=list(image_u_dict.keys()))
+        image_features = self.image_encoder(image_s.type(self.dtype), vctx_residual=vctx_residual)
         logits = self._encode_logits(image_features)
         loss_ce = F.cross_entropy(logits, label_s)
-        self._build_debug_snapshot(image_s, image_u_dict, image_features, logits, loss_ce)
+        self._build_debug_snapshot(
+            image_s, image_u_dict, image_features, logits, loss_ce, vctx_residual
+        )
 
         acc = compute_accuracy(logits, label_s)[0].item()
+        domain_gamma = torch.zeros((), device=loss_ce.device)
+        domain_residual_norm = torch.zeros((), device=loss_ce.device)
+        if self.domain_vctx is not None:
+            domain_gamma = self.domain_vctx.gamma.detach().float()
+            domain_residual_norm = vctx_residual.detach().float().norm()
+
         return {
             "loss": loss_ce,
             "loss_ce": loss_ce.detach(),
             "acc_src": torch.tensor(acc, device=loss_ce.device),
             "vctx_norm": self.image_encoder.vctx.detach().float().norm(),
+            "domain_gamma": domain_gamma,
+            "domain_residual_norm": domain_residual_norm,
         }
 
     def forward_inference(self, image, domain_name=None):
-        image_features = self.image_encoder(image.type(self.dtype))
+        vctx_residual = self._domain_residual(domain_names=domain_name)
+        image_features = self.image_encoder(image.type(self.dtype), vctx_residual=vctx_residual)
         return self._encode_logits(image_features)
 
     def forward(self, image, domain_name=None):
@@ -107,6 +172,7 @@ class CoCoOpVPTMTDA(MultiTargetTrainerXU):
         assert cfg.TRAINER.COCOOP_VPT_MTDA.N_VCTX > 0
         assert cfg.TRAINER.COCOOP_VPT_MTDA.VISION_PROMPT_DEPTH > 0
         assert cfg.TRAINER.COCOOP_VPT_MTDA.VCTX_POSITION in ["append", "insert"]
+        assert cfg.TRAINER.COCOOP_VPT_MTDA.DOMAIN_AWARE.HIDDEN_DIM >= 0
 
     def build_model(self):
         cfg = self.cfg
@@ -119,10 +185,16 @@ class CoCoOpVPTMTDA(MultiTargetTrainerXU):
 
         print("Building CoCoOpVPTMTDA")
         self.model = CustomCLIPVPTMTDA(cfg, classnames, clip_model)
+        self.model.to(self.device)
+        self.model.initialize_domain_vctx()
 
         print("Turning off CLIP weights; updating CoCoOp prompt learner and VPT")
         for name, param in self.model.named_parameters():
-            trainable = name.startswith("prompt_learner.") or name == "image_encoder.vctx"
+            trainable = (
+                name.startswith("prompt_learner.")
+                or name == "image_encoder.vctx"
+                or name.startswith("domain_vctx.")
+            )
             param.requires_grad_(trainable)
 
         enabled = sorted(
@@ -135,7 +207,6 @@ class CoCoOpVPTMTDA(MultiTargetTrainerXU):
         if cfg.MODEL.INIT_WEIGHTS:
             load_pretrained_weights(self.model.prompt_learner, cfg.MODEL.INIT_WEIGHTS)
 
-        self.model.to(self.device)
         print(f"# params: {count_num_param(self.model):,}")
         self.optim = build_optimizer(self.model, cfg.OPTIM)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)

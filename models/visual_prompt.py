@@ -2,6 +2,64 @@ import torch
 import torch.nn as nn
 
 
+class DomainTextVCTXGenerator(nn.Module):
+    """Map CLIP domain-text features to a visual prompt residual."""
+
+    def __init__(
+        self,
+        domain_names,
+        domain_text_features,
+        prompt_depth,
+        n_vctx,
+        vision_dim,
+        hidden_dim=512,
+        gamma_init=0.0,
+        gamma_learnable=True,
+    ):
+        super().__init__()
+        self.domain_names = list(domain_names)
+        self.domain_to_idx = {name: idx for idx, name in enumerate(self.domain_names)}
+        self.prompt_depth = int(prompt_depth)
+        self.n_vctx = int(n_vctx)
+        self.vision_dim = int(vision_dim)
+
+        input_dim = int(domain_text_features.shape[-1])
+        hidden_dim = int(hidden_dim)
+        if hidden_dim <= 0:
+            hidden_dim = max(input_dim, self.vision_dim)
+
+        self.register_buffer("domain_text_features", domain_text_features.float())
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, self.prompt_depth * self.n_vctx * self.vision_dim),
+        )
+
+        gamma = torch.tensor(float(gamma_init), dtype=torch.float32)
+        if gamma_learnable:
+            self.gamma = nn.Parameter(gamma)
+        else:
+            self.register_buffer("gamma", gamma)
+
+    def _indices(self, domain_names=None):
+        if domain_names is None:
+            return list(range(len(self.domain_names)))
+        if isinstance(domain_names, str):
+            domain_names = [domain_names]
+        return [self.domain_to_idx[name] for name in domain_names]
+
+    def forward(self, domain_names=None):
+        indices = self._indices(domain_names)
+        index_tensor = torch.tensor(
+            indices, device=self.domain_text_features.device, dtype=torch.long
+        )
+        domain_features = self.domain_text_features.index_select(0, index_tensor)
+        residual = self.net(domain_features)
+        residual = residual.view(-1, self.prompt_depth, self.n_vctx, self.vision_dim)
+        residual = residual.mean(dim=0)
+        return self.gamma.float() * residual
+
+
 class ShallowVPTVisualEncoder(nn.Module):
     """CLIP ViT visual encoder with shallow/deep visual prompt tokens."""
 
@@ -60,7 +118,13 @@ class ShallowVPTVisualEncoder(nn.Module):
             return torch.cat([tokens, prompt], dim=0)
         return torch.cat([tokens[:1], prompt, tokens[1:]], dim=0)
 
-    def forward(self, image):
+    def _prompt_tokens(self, layer_idx, dtype, device, vctx_residual=None):
+        prompt = self.vctx[layer_idx]
+        if vctx_residual is not None:
+            prompt = prompt + vctx_residual[layer_idx].to(device=prompt.device)
+        return prompt.to(dtype=dtype, device=device)
+
+    def forward(self, image, vctx_residual=None):
         x = self.visual.conv1(image.type(self.dtype))
         x = x.reshape(x.shape[0], x.shape[1], -1)
         x = x.permute(0, 2, 1)
@@ -73,8 +137,8 @@ class ShallowVPTVisualEncoder(nn.Module):
         x = x + self.visual.positional_embedding.to(x.dtype)
 
         base_len = x.shape[1]
-        visual_ctx = self.vctx[0].unsqueeze(0).expand(x.shape[0], -1, -1)
-        visual_ctx = visual_ctx.to(dtype=x.dtype, device=x.device)
+        visual_ctx = self._prompt_tokens(0, x.dtype, x.device, vctx_residual)
+        visual_ctx = visual_ctx.unsqueeze(0).expand(x.shape[0], -1, -1)
         x = self._add_prompt_bld(x, visual_ctx)
 
         x = self.visual.ln_pre(x)
@@ -84,7 +148,9 @@ class ShallowVPTVisualEncoder(nn.Module):
         for layer_idx, block in enumerate(self.visual.transformer.resblocks, start=1):
             if 1 < layer_idx <= self.prompt_depth:
                 x = self._strip_prompt_lbd(x, base_len)
-                visual_ctx = self.vctx[layer_idx - 1].to(dtype=x.dtype, device=x.device)
+                visual_ctx = self._prompt_tokens(
+                    layer_idx - 1, x.dtype, x.device, vctx_residual
+                )
                 visual_ctx = visual_ctx.unsqueeze(0).expand(batch_size, -1, -1)
                 visual_ctx = visual_ctx.permute(1, 0, 2)
                 x = self._add_prompt_lbd(x, visual_ctx)
