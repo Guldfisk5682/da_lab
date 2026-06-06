@@ -13,7 +13,7 @@ fi
 cd "${REPO_ROOT}"
 
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
-  echo "Usage: bash scripts/clip_tssp_mtda/run_officehome_one.sh <A|C|P|R> <SEED> <clip_tssp_full|clip_tssp_no_gap> [--debug]" >&2
+  echo "Usage: bash scripts/clip_tssp_mtda/run_officehome_one.sh <A|C|P|R> <SEED> <clip_tssp_full|clip_tssp_no_gap|clip_tssp_gap|clip_tssp_pair|clip_tssp_pair_gap> [--debug]" >&2
   exit 1
 fi
 
@@ -68,11 +68,43 @@ TRAINER="CLIPTSSPMTDA"
 case "${METHOD}" in
   clip_tssp_full|tssp_full|full)
     DEFAULT_TAG="clip_tssp_full"
-    METHOD_OPTS=("TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True")
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.LAYER_COMPRESSION" "none"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "after_target"
+    )
     ;;
   clip_tssp_no_gap|tssp_no_gap|no_gap)
     DEFAULT_TAG="clip_tssp_no_gap"
-    METHOD_OPTS=("TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "False")
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "False"
+      "TRAINER.CLIP_TSSP_MTDA.LAYER_COMPRESSION" "none"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "after_target"
+    )
+    ;;
+  clip_tssp_gap|tssp_gap|gap)
+    DEFAULT_TAG="clip_tssp_gap"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.LAYER_COMPRESSION" "none"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+    )
+    ;;
+  clip_tssp_pair|tssp_pair|pair)
+    DEFAULT_TAG="clip_tssp_pair"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "False"
+      "TRAINER.CLIP_TSSP_MTDA.LAYER_COMPRESSION" "pair_mean"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "after_target"
+    )
+    ;;
+  clip_tssp_pair_gap|tssp_pair_gap|pair_gap)
+    DEFAULT_TAG="clip_tssp_pair_gap"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.LAYER_COMPRESSION" "pair_mean"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+    )
     ;;
   *)
     echo "Unknown method: ${METHOD}" >&2

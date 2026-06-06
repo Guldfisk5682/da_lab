@@ -77,6 +77,41 @@ def collect_many(root, seeds):
     return rows
 
 
+def summarize(rows):
+    grouped = OrderedDict()
+    for row in rows:
+        key = (row["method"], row["seed"])
+        if key not in grouped:
+            grouped[key] = {domain: [] for domain in DOMAIN_TO_CODE.values()}
+        for target_code, value in row["scores"].items():
+            if target_code in grouped[key]:
+                grouped[key][target_code].append(value)
+
+    summaries = []
+    for (method, seed), domain_values in grouped.items():
+        all_values = [
+            value
+            for values in domain_values.values()
+            for value in values
+        ]
+        summaries.append(
+            {
+                "method": method,
+                "seed": seed,
+                "domain_means": {
+                    domain: statistics.mean(values) if values else None
+                    for domain, values in domain_values.items()
+                },
+                "overall": statistics.mean(all_values) if all_values else None,
+                "overall_std": statistics.pstdev(all_values)
+                if len(all_values) > 1
+                else 0.0,
+                "num_tasks": len(all_values),
+            }
+        )
+    return summaries
+
+
 def write_csv(rows, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="") as f:
@@ -93,9 +128,49 @@ def write_csv(rows, output_path):
             writer.writerow([row["method"], row["seed"], row["source"], *cells, macro])
 
 
-def write_markdown(rows, output_path):
+def write_summary_csv(summaries, output_path):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "Method",
+                "Seed",
+                "Target A Avg",
+                "Target C Avg",
+                "Target P Avg",
+                "Target R Avg",
+                "Overall 12-task Avg",
+                "12-task Std",
+                "Tasks",
+            ]
+        )
+        for summary in summaries:
+            domain_means = summary["domain_means"]
+            writer.writerow(
+                [
+                    summary["method"],
+                    summary["seed"],
+                    *[
+                        ""
+                        if domain_means[domain] is None
+                        else f"{domain_means[domain]:.2f}"
+                        for domain in ["A", "C", "P", "R"]
+                    ],
+                    ""
+                    if summary["overall"] is None
+                    else f"{summary['overall']:.2f}",
+                    f"{summary['overall_std']:.2f}",
+                    f"{summary['num_tasks']}/12",
+                ]
+            )
+
+
+def write_markdown(rows, summaries, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
+        "## Per-source Results",
+        "",
         "| Method | Seed | Source | Target1 | Target2 | Target3 | Macro Avg |",
         "| --- | ---: | --- | ---: | ---: | ---: | ---: |",
     ]
@@ -111,11 +186,42 @@ def write_markdown(rows, output_path):
             + " |"
         )
 
-    if rows:
-        overall_values = [row["macro_avg"] for row in rows if row["macro_avg"] is not None]
-        overall = statistics.mean(overall_values) if overall_values else 0.0
-        lines.append("")
-        lines.append(f"Overall average across collected rows: {overall:.2f}%")
+    lines.extend(
+        [
+            "",
+            "## Target-domain And Overall Summary",
+            "",
+            "| Method | Seed | Target A Avg | Target C Avg | Target P Avg | Target R Avg | Overall 12-task Avg | 12-task Std | Tasks |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for summary in summaries:
+        domain_means = summary["domain_means"]
+        cells = [
+            ""
+            if domain_means[domain] is None
+            else f"{domain_means[domain]:.2f}"
+            for domain in ["A", "C", "P", "R"]
+        ]
+        overall = (
+            ""
+            if summary["overall"] is None
+            else f"{summary['overall']:.2f}"
+        )
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    summary["method"],
+                    str(summary["seed"]),
+                    *cells,
+                    overall,
+                    f"{summary['overall_std']:.2f}",
+                    f"{summary['num_tasks']}/12",
+                ]
+            )
+            + " |"
+        )
 
     output_path.write_text("\n".join(lines) + "\n")
 
@@ -130,13 +236,19 @@ def main():
     root = repo_root / "output" / "office_home_mtda"
     seeds = args.seeds if args.seeds is not None else [args.seed if args.seed is not None else 1]
     rows = collect_many(root, seeds)
+    summaries = summarize(rows)
 
     suffix = f"seed{seeds[0]}" if len(seeds) == 1 else "seeds" + "-".join(str(seed) for seed in seeds)
     csv_path = repo_root / "results" / f"officehome_clip_tssp_{suffix}.csv"
+    summary_csv_path = (
+        repo_root / "results" / f"officehome_clip_tssp_{suffix}_summary.csv"
+    )
     md_path = repo_root / "results" / f"officehome_clip_tssp_{suffix}.md"
     write_csv(rows, csv_path)
-    write_markdown(rows, md_path)
+    write_summary_csv(summaries, summary_csv_path)
+    write_markdown(rows, summaries, md_path)
     print(csv_path.relative_to(repo_root))
+    print(summary_csv_path.relative_to(repo_root))
     print(md_path.relative_to(repo_root))
 
 

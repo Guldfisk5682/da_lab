@@ -13,7 +13,7 @@ fi
 cd "${REPO_ROOT}"
 
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-  echo "Usage: bash scripts/clip_tssp_mtda/run_officehome_all.sh <clip_tssp_full|clip_tssp_no_gap> [--debug]" >&2
+  echo "Usage: bash scripts/clip_tssp_mtda/run_officehome_all.sh <clip_tssp_full|clip_tssp_no_gap|clip_tssp_gap|clip_tssp_pair|clip_tssp_pair_gap> [--debug]" >&2
   exit 1
 fi
 

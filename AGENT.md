@@ -62,6 +62,9 @@ python scripts/clip_vpt_mtda/collect_officehome_results.py
 
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_full
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_no_gap
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_gap
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap
 python scripts/clip_tssp_mtda/collect_officehome_results.py
 ```
 
@@ -196,6 +199,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 
 - 2026-06-05: Merged `cocoop-vpt-mtda` into `main`, then opened `clip-vpt-mtda` for the CLIP-first reset. Added `CLIPVPTMTDA` B0/B1: B0 evaluates frozen zero-shot CLIP on Office-Home SS-MTDA, while B1 trains only persistent appended VCTX on top of frozen CLIP with fixed text prompts.
 - 2026-06-06: Added `CLIPTSSPMTDA` as the next CLIP-first branch experiment. It maps all 12 frozen CLIP ViT hidden-state mean/std statistics into text-side target-set style tokens. `clip_tssp_full` uses source-style, target-set, and gap tokens; `clip_tssp_no_gap` removes the gap tokens for ablation. CLIP remains frozen and the first version trains only the style projector with source CE.
+- 2026-06-06: Added three focused TSSP ablations. `clip_tssp_gap` changes the 12-layer prompt order from `[source, target, gap]` to `[source, gap, target]`; `clip_tssp_pair` averages adjacent projected layer tokens into six `[source, target]` token groups; `clip_tssp_pair_gap` combines six-layer pair compression with `[source, gap, target]`. The TSSP collector now reports per-target-domain averages and the overall mean across all 12 SS-MTDA transfer accuracies.
 - 2026-06-03: Merged `ss-mtda-style-prompt` into `main` as infrastructure, then opened `cocoop-vpt-mtda` for the new multi-prompt DA direction. The merge keeps Office-Home MTDA dataloading, `CoCoOpMTDA`, Office-Home download/verify scripts, result collection, and server CUDA fixes.
 - 2026-06-03: Marked `StylePromptMTDA` as a deprecated negative-result path. Experiments showed pure text-side target-style prompt modulation gives only tiny and unstable gains over `CoCoOpMTDA`, so future work should not keep tuning style queue/domain-mean prompt bias.
 - 2026-06-03: Added the first new active method, `CoCoOpVPTMTDA`: CoCoOp text prompt learning plus an independent shallow visual prompt tensor appended to CLIP ViT tokens. This is the first multi-prompt tuning DA experiment and should be compared against `CoCoOpMTDA`.

@@ -33,6 +33,8 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self.dtype = clip_model.dtype
         self.target_domains = list(cfg.DATASET.TARGET_DOMAINS)
         self.use_gap_token = bool(tssp_cfg.USE_GAP_TOKEN)
+        self.layer_compression = str(tssp_cfg.LAYER_COMPRESSION).lower()
+        self.gap_position = str(tssp_cfg.GAP_POSITION).lower()
         self.proto_momentum = float(tssp_cfg.PROTO_MOMENTUM)
         self.debug_print_once = bool(tssp_cfg.DEBUG.PRINT_ONCE)
         self._has_printed_debug = False
@@ -55,11 +57,27 @@ class CustomCLIPTSSPMTDA(nn.Module):
         )
 
         self.depth = depth
+        if self.layer_compression == "none":
+            self.style_depth = depth
+        elif self.layer_compression == "pair_mean":
+            if depth % 2 != 0:
+                raise ValueError(
+                    "pair_mean layer compression requires an even visual depth"
+                )
+            self.style_depth = depth // 2
+        else:
+            raise ValueError(
+                f"Unsupported LAYER_COMPRESSION={self.layer_compression}"
+            )
         self.text_dim = text_dim
-        self.n_ctx = depth * (3 if self.use_gap_token else 2)
+        self.n_ctx = self.style_depth * (3 if self.use_gap_token else 2)
 
-        self.register_buffer("source_style_proto", torch.zeros(depth, text_dim))
-        self.register_buffer("target_style_proto", torch.zeros(depth, text_dim))
+        self.register_buffer(
+            "source_style_proto", torch.zeros(self.style_depth, text_dim)
+        )
+        self.register_buffer(
+            "target_style_proto", torch.zeros(self.style_depth, text_dim)
+        )
         self.register_buffer("proto_initialized", torch.tensor(False))
 
         template = str(tssp_cfg.PROMPT_TEMPLATE)
@@ -81,8 +99,11 @@ class CustomCLIPTSSPMTDA(nn.Module):
 
         print("CLIPTSSPMTDA prompt setup:")
         print(f"  prompt template: {template}")
-        print(f"  style layers: {depth}")
+        print(f"  visual layers: {depth}")
+        print(f"  layer compression: {self.layer_compression}")
+        print(f"  style token layers: {self.style_depth}")
         print(f"  use gap token: {self.use_gap_token}")
+        print(f"  gap position: {self.gap_position}")
         print(f"  context tokens: {self.n_ctx}")
 
     @staticmethod
@@ -97,8 +118,22 @@ class CustomCLIPTSSPMTDA(nn.Module):
 
     def _compute_style_tokens(self, hidden_states):
         style_tokens = self.style_projector(hidden_states).float()
+        if self.layer_compression == "pair_mean":
+            batch_size, depth, text_dim = style_tokens.shape
+            style_tokens = style_tokens.reshape(
+                batch_size, depth // 2, 2, text_dim
+            ).mean(dim=2)
         self._ensure_finite("style_tokens", style_tokens)
         return style_tokens
+
+    def _assemble_context(self, source_tokens, target_tokens, gap_tokens=None):
+        if gap_tokens is None:
+            return torch.cat([source_tokens, target_tokens], dim=1)
+        if self.gap_position == "middle":
+            return torch.cat([source_tokens, gap_tokens, target_tokens], dim=1)
+        if self.gap_position == "after_target":
+            return torch.cat([source_tokens, target_tokens, gap_tokens], dim=1)
+        raise ValueError(f"Unsupported GAP_POSITION={self.gap_position}")
 
     @torch.no_grad()
     def _update_prototypes(self, source_proto, target_proto):
@@ -127,15 +162,17 @@ class CustomCLIPTSSPMTDA(nn.Module):
 
         batch_size = source_tokens.shape[0]
         target_tokens = target_proto.unsqueeze(0).expand(batch_size, -1, -1)
-        pieces = [source_tokens, target_tokens]
 
         gap_tokens = None
         if self.use_gap_token:
             gap_proto = target_proto - source_proto
             gap_tokens = gap_proto.unsqueeze(0).expand(batch_size, -1, -1)
-            pieces.append(gap_tokens)
 
-        context = torch.cat(pieces, dim=1)
+        context = self._assemble_context(
+            source_tokens=source_tokens,
+            target_tokens=target_tokens,
+            gap_tokens=gap_tokens,
+        )
         self._ensure_finite("context_train", context)
         return context, {
             "source_proto": source_proto,
@@ -153,7 +190,7 @@ class CustomCLIPTSSPMTDA(nn.Module):
                 )
                 self._has_warned_empty_proto = True
             source_proto = torch.zeros(
-                self.depth, self.text_dim, device=device, dtype=torch.float32
+                self.style_depth, self.text_dim, device=device, dtype=torch.float32
             )
             target_proto = torch.zeros_like(source_proto)
         else:
@@ -162,12 +199,17 @@ class CustomCLIPTSSPMTDA(nn.Module):
 
         source_tokens = source_proto.unsqueeze(0).expand(batch_size, -1, -1)
         target_tokens = target_proto.unsqueeze(0).expand(batch_size, -1, -1)
-        pieces = [source_tokens, target_tokens]
+        gap_tokens = None
         if self.use_gap_token:
-            gap_tokens = (target_proto - source_proto).unsqueeze(0)
-            pieces.append(gap_tokens.expand(batch_size, -1, -1))
+            gap_tokens = (target_proto - source_proto).unsqueeze(0).expand(
+                batch_size, -1, -1
+            )
 
-        context = torch.cat(pieces, dim=1)
+        context = self._assemble_context(
+            source_tokens=source_tokens,
+            target_tokens=target_tokens,
+            gap_tokens=gap_tokens,
+        )
         self._ensure_finite("context_eval", context)
         return context
 
@@ -232,7 +274,9 @@ class CustomCLIPTSSPMTDA(nn.Module):
         if stats["gap_tokens"] is not None:
             print("gap style tokens shape:", tuple(stats["gap_tokens"].shape))
         print("context shape:", tuple(context.shape))
+        print("layer_compression:", self.layer_compression)
         print("use_gap_token:", self.use_gap_token)
+        print("gap_position:", self.gap_position)
         print("logits shape:", tuple(logits.shape))
         print("loss:", float(loss.detach().item()))
         print("source token norm:", float(source_tokens.detach().norm().item()))
@@ -302,6 +346,8 @@ class CLIPTSSPMTDA(MultiTargetTrainerXU):
         tssp_cfg = cfg.TRAINER.CLIP_TSSP_MTDA
         assert tssp_cfg.PREC in ["fp16", "fp32", "amp"]
         assert tssp_cfg.HIDDEN_DIM > 0
+        assert tssp_cfg.LAYER_COMPRESSION in ["none", "pair_mean"]
+        assert tssp_cfg.GAP_POSITION in ["after_target", "middle"]
         assert 0.0 <= tssp_cfg.PROTO_MOMENTUM < 1.0
         assert tssp_cfg.STYLE_EPS > 0.0
         assert "{}" in tssp_cfg.PROMPT_TEMPLATE

@@ -201,6 +201,19 @@ no-gap: source-style tokens + target-set style tokens：
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_no_gap
 ```
 
+新增三组 prompt-order / layer-compression 消融：
+
+```bash
+# 12-layer tokens: [source, gap, target]
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_gap
+
+# Pair adjacent layers into 6 tokens: [source, target]
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair
+
+# Pair adjacent layers into 6 tokens: [source, gap, target]
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap
+```
+
 单个 source smoke test：
 
 ```bash
@@ -213,6 +226,8 @@ TSSP 结果汇总：
 ```bash
 python scripts/clip_tssp_mtda/collect_officehome_results.py
 ```
+
+collector 会输出逐 source 结果、按目标域 `A/C/P/R` 聚合的平均准确率，以及全部 12 个迁移任务的 overall average。
 
 上一阶段 CoCoOp/StylePrompt/VPT 入口如下，主要用于对照历史结果。
 

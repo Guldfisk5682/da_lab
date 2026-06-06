@@ -38,6 +38,8 @@ TRAINER:
     PREC: "amp"
     HIDDEN_DIM: 512
     USE_GAP_TOKEN: true
+    LAYER_COMPRESSION: "none"
+    GAP_POSITION: "after_target"
     PROTO_MOMENTUM: 0.9
     STYLE_EPS: 1e-6
     PROMPT_TEMPLATE: "{}."
