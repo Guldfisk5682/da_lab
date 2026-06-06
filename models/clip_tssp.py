@@ -78,7 +78,9 @@ class MultiLayerStyleProjector(nn.Module):
 
     def forward(self, hidden_states):
         if len(hidden_states) != self.depth:
-            raise ValueError(f"Expected {self.depth} hidden states, got {len(hidden_states)}")
+            raise ValueError(
+                f"Expected {self.depth} hidden states, got {len(hidden_states)}"
+            )
 
         style_tokens = []
         for hidden, projector in zip(hidden_states, self.projectors):
@@ -89,3 +91,27 @@ class MultiLayerStyleProjector(nn.Module):
             style_tokens.append(projector(stats))
 
         return torch.stack(style_tokens, dim=1)
+
+
+class MultiLayerImageProjector(nn.Module):
+    """Project per-layer pooled visual content into text prompt tokens."""
+
+    def __init__(self, visual_dim, text_dim, depth):
+        super().__init__()
+        self.depth = int(depth)
+        self.projectors = nn.ModuleList(
+            [nn.Linear(visual_dim, text_dim) for _ in range(self.depth)]
+        )
+
+    def forward(self, hidden_states):
+        if len(hidden_states) != self.depth:
+            raise ValueError(
+                f"Expected {self.depth} hidden states, got {len(hidden_states)}"
+            )
+
+        image_tokens = []
+        for hidden, projector in zip(hidden_states, self.projectors):
+            pooled = hidden.float().mean(dim=1)
+            image_tokens.append(projector(pooled))
+
+        return torch.stack(image_tokens, dim=1)

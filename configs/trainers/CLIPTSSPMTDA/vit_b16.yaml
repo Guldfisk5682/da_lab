@@ -40,6 +40,8 @@ TRAINER:
     USE_GAP_TOKEN: true
     STYLE_GROUP_SIZE: 1
     GAP_GROUP_SIZE: 1
+    USE_IMAGE_TOKENS: false
+    IMAGE_GROUP_SIZE: 1
     GAP_POSITION: "after_target"
     PROTO_MOMENTUM: 0.9
     STYLE_EPS: 1e-6

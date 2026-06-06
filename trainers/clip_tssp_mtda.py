@@ -12,7 +12,11 @@ from dassl.metrics import compute_accuracy
 from dassl.optim import build_lr_scheduler, build_optimizer
 from dassl.utils import count_num_param
 
-from models.clip_tssp import CLIPVisualWithHidden, MultiLayerStyleProjector
+from models.clip_tssp import (
+    CLIPVisualWithHidden,
+    MultiLayerImageProjector,
+    MultiLayerStyleProjector,
+)
 from trainers.checkpoint_utils import load_checkpoint_compat
 from trainers.cocoop import TextEncoder, load_clip_to_cpu
 from trainers.mtda_base import MultiTargetTrainerXU
@@ -35,6 +39,8 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self.use_gap_token = bool(tssp_cfg.USE_GAP_TOKEN)
         self.style_group_size = int(tssp_cfg.STYLE_GROUP_SIZE)
         self.gap_group_size = int(tssp_cfg.GAP_GROUP_SIZE)
+        self.use_image_tokens = bool(tssp_cfg.USE_IMAGE_TOKENS)
+        self.image_group_size = int(tssp_cfg.IMAGE_GROUP_SIZE)
         self.gap_position = str(tssp_cfg.GAP_POSITION).lower()
         self.proto_momentum = float(tssp_cfg.PROTO_MOMENTUM)
         self.debug_print_once = bool(tssp_cfg.DEBUG.PRINT_ONCE)
@@ -56,6 +62,14 @@ class CustomCLIPTSSPMTDA(nn.Module):
             hidden_dim=int(tssp_cfg.HIDDEN_DIM),
             eps=float(tssp_cfg.STYLE_EPS),
         )
+        if self.use_image_tokens:
+            self.image_projector = MultiLayerImageProjector(
+                visual_dim=visual_dim,
+                text_dim=text_dim,
+                depth=depth,
+            )
+        else:
+            self.image_projector = None
 
         self.depth = depth
         self.style_depth = self._compressed_depth(
@@ -64,10 +78,15 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self.gap_depth = self._compressed_depth(
             depth, self.gap_group_size, "GAP_GROUP_SIZE"
         )
+        self.image_depth = self._compressed_depth(
+            depth, self.image_group_size, "IMAGE_GROUP_SIZE"
+        )
         self.text_dim = text_dim
         self.n_ctx = self.style_depth * 2
         if self.use_gap_token:
             self.n_ctx += self.gap_depth
+        if self.use_image_tokens:
+            self.n_ctx += self.image_depth
 
         self.register_buffer(
             "source_style_proto", torch.zeros(self.style_depth, text_dim)
@@ -109,6 +128,9 @@ class CustomCLIPTSSPMTDA(nn.Module):
         print(f"  gap token layers: {self.gap_depth}")
         print(f"  use gap token: {self.use_gap_token}")
         print(f"  gap position: {self.gap_position}")
+        print(f"  use image tokens: {self.use_image_tokens}")
+        print(f"  image group size: {self.image_group_size}")
+        print(f"  image token layers: {self.image_depth}")
         print(f"  context tokens: {self.n_ctx}")
 
     @staticmethod
@@ -136,6 +158,16 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self._ensure_finite("style_tokens", style_tokens)
         return style_tokens
 
+    def _compute_image_tokens(self, hidden_states):
+        if self.image_projector is None:
+            return None
+        image_tokens = self.image_projector(hidden_states).float()
+        image_tokens = self._compress_tokens(
+            image_tokens, self.image_group_size
+        )
+        self._ensure_finite("image_tokens", image_tokens)
+        return image_tokens
+
     @staticmethod
     def _compress_tokens(tokens, group_size):
         if group_size == 1:
@@ -149,14 +181,24 @@ class CustomCLIPTSSPMTDA(nn.Module):
             batch_size, depth // group_size, group_size, text_dim
         ).mean(dim=2)
 
-    def _assemble_context(self, source_tokens, target_tokens, gap_tokens=None):
+    def _assemble_context(
+        self,
+        source_tokens,
+        target_tokens,
+        gap_tokens=None,
+        image_tokens=None,
+    ):
         if gap_tokens is None:
-            return torch.cat([source_tokens, target_tokens], dim=1)
-        if self.gap_position == "middle":
-            return torch.cat([source_tokens, gap_tokens, target_tokens], dim=1)
-        if self.gap_position == "after_target":
-            return torch.cat([source_tokens, target_tokens, gap_tokens], dim=1)
-        raise ValueError(f"Unsupported GAP_POSITION={self.gap_position}")
+            pieces = [source_tokens, target_tokens]
+        elif self.gap_position == "middle":
+            pieces = [source_tokens, gap_tokens, target_tokens]
+        elif self.gap_position == "after_target":
+            pieces = [source_tokens, target_tokens, gap_tokens]
+        else:
+            raise ValueError(f"Unsupported GAP_POSITION={self.gap_position}")
+        if image_tokens is not None:
+            pieces.append(image_tokens)
+        return torch.cat(pieces, dim=1)
 
     @torch.no_grad()
     def _update_prototypes(
@@ -188,7 +230,12 @@ class CustomCLIPTSSPMTDA(nn.Module):
             target_gap_proto.detach(), alpha=1.0 - momentum
         )
 
-    def _build_train_context(self, source_raw_tokens, target_raw_tokens_by_domain):
+    def _build_train_context(
+        self,
+        source_raw_tokens,
+        target_raw_tokens_by_domain,
+        source_image_tokens=None,
+    ):
         source_style_tokens = self._compress_tokens(
             source_raw_tokens, self.style_group_size
         )
@@ -247,6 +294,7 @@ class CustomCLIPTSSPMTDA(nn.Module):
             source_tokens=source_style_tokens,
             target_tokens=target_style_tokens,
             gap_tokens=gap_tokens,
+            image_tokens=source_image_tokens,
         )
         self._ensure_finite("context_train", context)
         return context, {
@@ -259,9 +307,10 @@ class CustomCLIPTSSPMTDA(nn.Module):
             "target_gap_proto": target_gap_proto,
             "target_gap_domain_protos": target_gap_domain_protos,
             "gap_tokens": gap_tokens,
+            "image_tokens": source_image_tokens,
         }
 
-    def _build_eval_context(self, batch_size, device):
+    def _build_eval_context(self, batch_size, device, image_tokens=None):
         if not bool(self.proto_initialized.item()):
             if not self._has_warned_empty_proto:
                 print(
@@ -299,6 +348,7 @@ class CustomCLIPTSSPMTDA(nn.Module):
             source_tokens=source_tokens,
             target_tokens=target_tokens,
             gap_tokens=gap_tokens,
+            image_tokens=image_tokens,
         )
         self._ensure_finite("context_eval", context)
         return context
@@ -340,6 +390,7 @@ class CustomCLIPTSSPMTDA(nn.Module):
         hidden_s,
         source_raw_tokens,
         target_raw_tokens_by_domain,
+        source_image_tokens,
         context,
         stats,
         logits,
@@ -378,11 +429,15 @@ class CustomCLIPTSSPMTDA(nn.Module):
         print("target-set gap proto shape:", tuple(stats["target_gap_proto"].shape))
         if stats["gap_tokens"] is not None:
             print("gap style tokens shape:", tuple(stats["gap_tokens"].shape))
+        if source_image_tokens is not None:
+            print("source image tokens shape:", tuple(source_image_tokens.shape))
         print("context shape:", tuple(context.shape))
         print("style_group_size:", self.style_group_size)
         print("gap_group_size:", self.gap_group_size)
         print("use_gap_token:", self.use_gap_token)
         print("gap_position:", self.gap_position)
+        print("use_image_tokens:", self.use_image_tokens)
+        print("image_group_size:", self.image_group_size)
         print("logits shape:", tuple(logits.shape))
         print("loss:", float(loss.detach().item()))
         print(
@@ -395,11 +450,17 @@ class CustomCLIPTSSPMTDA(nn.Module):
         )
         if stats["gap_tokens"] is not None:
             print("gap token norm:", float(stats["gap_tokens"].detach().norm().item()))
+        if source_image_tokens is not None:
+            print(
+                "image token norm:",
+                float(source_image_tokens.detach().norm().item()),
+            )
         self._has_printed_debug = True
 
     def forward_train(self, image_s, label_s, image_u_dict):
         image_features_s, hidden_s = self._encode_visual(image_s)
         source_raw_tokens = self._compute_style_tokens(hidden_s)
+        source_image_tokens = self._compute_image_tokens(hidden_s)
 
         target_raw_tokens_by_domain = OrderedDict()
         for domain_name, image_u in image_u_dict.items():
@@ -409,7 +470,9 @@ class CustomCLIPTSSPMTDA(nn.Module):
             )
 
         context, stats = self._build_train_context(
-            source_raw_tokens, target_raw_tokens_by_domain
+            source_raw_tokens,
+            target_raw_tokens_by_domain,
+            source_image_tokens=source_image_tokens,
         )
         logits = self._compute_logits(image_features_s, context)
         loss_ce = F.cross_entropy(logits, label_s)
@@ -421,6 +484,7 @@ class CustomCLIPTSSPMTDA(nn.Module):
             hidden_s=hidden_s,
             source_raw_tokens=source_raw_tokens,
             target_raw_tokens_by_domain=target_raw_tokens_by_domain,
+            source_image_tokens=source_image_tokens,
             context=context,
             stats=stats,
             logits=logits,
@@ -433,6 +497,9 @@ class CustomCLIPTSSPMTDA(nn.Module):
         gap_norm = torch.zeros((), device=loss_ce.device)
         if stats["gap_tokens"] is not None:
             gap_norm = stats["gap_tokens"].detach().float().norm()
+        image_norm = torch.zeros((), device=loss_ce.device)
+        if source_image_tokens is not None:
+            image_norm = source_image_tokens.detach().float().norm()
 
         return {
             "loss": loss_ce,
@@ -441,14 +508,17 @@ class CustomCLIPTSSPMTDA(nn.Module):
             "source_style_norm": source_norm,
             "target_style_norm": target_norm,
             "gap_style_norm": gap_norm,
+            "image_token_norm": image_norm,
         }
 
     def forward_inference(self, image, domain_name=None):
         del domain_name
-        image_features, _ = self._encode_visual(image)
+        image_features, hidden_states = self._encode_visual(image)
+        image_tokens = self._compute_image_tokens(hidden_states)
         context = self._build_eval_context(
             batch_size=image_features.shape[0],
             device=image_features.device,
+            image_tokens=image_tokens,
         )
         return self._compute_logits(image_features, context)
 
@@ -464,6 +534,7 @@ class CLIPTSSPMTDA(MultiTargetTrainerXU):
         assert tssp_cfg.HIDDEN_DIM > 0
         assert tssp_cfg.STYLE_GROUP_SIZE in [1, 2, 3, 4]
         assert tssp_cfg.GAP_GROUP_SIZE in [1, 2, 3, 4]
+        assert tssp_cfg.IMAGE_GROUP_SIZE in [1, 2, 3, 4]
         assert tssp_cfg.GAP_POSITION in ["after_target", "middle"]
         assert 0.0 <= tssp_cfg.PROTO_MOMENTUM < 1.0
         assert tssp_cfg.STYLE_EPS > 0.0
@@ -481,9 +552,12 @@ class CLIPTSSPMTDA(MultiTargetTrainerXU):
         print("Building CLIPTSSPMTDA")
         self.model = CustomCLIPTSSPMTDA(cfg, classnames, clip_model)
 
-        print("Freezing CLIP; updating only the multi-layer style projector")
+        print("Freezing CLIP; updating only TSSP prompt projectors")
         for name, param in self.model.named_parameters():
-            param.requires_grad_(name.startswith("style_projector."))
+            trainable = name.startswith("style_projector.") or name.startswith(
+                "image_projector."
+            )
+            param.requires_grad_(trainable)
 
         enabled = [
             name for name, param in self.model.named_parameters() if param.requires_grad
@@ -498,7 +572,10 @@ class CLIPTSSPMTDA(MultiTargetTrainerXU):
         print(f"# params: {total_params:,}")
         print(f"# trainable params: {trainable_params:,}")
 
-        self.optim = build_optimizer(self.model.style_projector, cfg.OPTIM)
+        trainable_params = [
+            param for param in self.model.parameters() if param.requires_grad
+        ]
+        self.optim = build_optimizer(trainable_params, cfg.OPTIM)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
         self.register_model("clip_tssp_mtda", self.model, self.optim, self.sched)
         self.scaler = GradScaler() if cfg.TRAINER.CLIP_TSSP_MTDA.PREC == "amp" else None

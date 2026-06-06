@@ -232,6 +232,21 @@ bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style1_gap4
 
 `STYLE_GROUP_SIZE=3/4` 表示每三/四个相邻 ViT layer style tokens 固定取均值；`GAP_GROUP_SIZE` 独立控制 gap token 的分组尺度。
 
+固定当前最佳 PairGap 后，加入当前 source/test image 自身的多层 content tokens：
+
+```bash
+# [S6, G6, T6, I12]
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img12
+
+# [S6, G6, T6, I6]，相邻两层 image tokens 取均值
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img6
+
+# [S6, G6, T6, I4]，相邻三层 image tokens 取均值
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img4
+```
+
+每层 image token 使用完整 hidden tokens 的均值池化，再经过该层独立的 `Linear(vision_dim, text_dim)`。AD-CLIP 源码中的四个 image tokens 并不是相邻三层分组；本仓库使用明确的相邻层分组，以便比较 12/6/4 层内容保留尺度。
+
 单个 source smoke test：
 
 ```bash
