@@ -33,7 +33,8 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self.dtype = clip_model.dtype
         self.target_domains = list(cfg.DATASET.TARGET_DOMAINS)
         self.use_gap_token = bool(tssp_cfg.USE_GAP_TOKEN)
-        self.layer_compression = str(tssp_cfg.LAYER_COMPRESSION).lower()
+        self.style_group_size = int(tssp_cfg.STYLE_GROUP_SIZE)
+        self.gap_group_size = int(tssp_cfg.GAP_GROUP_SIZE)
         self.gap_position = str(tssp_cfg.GAP_POSITION).lower()
         self.proto_momentum = float(tssp_cfg.PROTO_MOMENTUM)
         self.debug_print_once = bool(tssp_cfg.DEBUG.PRINT_ONCE)
@@ -57,26 +58,28 @@ class CustomCLIPTSSPMTDA(nn.Module):
         )
 
         self.depth = depth
-        if self.layer_compression == "none":
-            self.style_depth = depth
-        elif self.layer_compression == "pair_mean":
-            if depth % 2 != 0:
-                raise ValueError(
-                    "pair_mean layer compression requires an even visual depth"
-                )
-            self.style_depth = depth // 2
-        else:
-            raise ValueError(
-                f"Unsupported LAYER_COMPRESSION={self.layer_compression}"
-            )
+        self.style_depth = self._compressed_depth(
+            depth, self.style_group_size, "STYLE_GROUP_SIZE"
+        )
+        self.gap_depth = self._compressed_depth(
+            depth, self.gap_group_size, "GAP_GROUP_SIZE"
+        )
         self.text_dim = text_dim
-        self.n_ctx = self.style_depth * (3 if self.use_gap_token else 2)
+        self.n_ctx = self.style_depth * 2
+        if self.use_gap_token:
+            self.n_ctx += self.gap_depth
 
         self.register_buffer(
             "source_style_proto", torch.zeros(self.style_depth, text_dim)
         )
         self.register_buffer(
             "target_style_proto", torch.zeros(self.style_depth, text_dim)
+        )
+        self.register_buffer(
+            "source_gap_proto", torch.zeros(self.gap_depth, text_dim)
+        )
+        self.register_buffer(
+            "target_gap_proto", torch.zeros(self.gap_depth, text_dim)
         )
         self.register_buffer("proto_initialized", torch.tensor(False))
 
@@ -100,11 +103,23 @@ class CustomCLIPTSSPMTDA(nn.Module):
         print("CLIPTSSPMTDA prompt setup:")
         print(f"  prompt template: {template}")
         print(f"  visual layers: {depth}")
-        print(f"  layer compression: {self.layer_compression}")
+        print(f"  style group size: {self.style_group_size}")
         print(f"  style token layers: {self.style_depth}")
+        print(f"  gap group size: {self.gap_group_size}")
+        print(f"  gap token layers: {self.gap_depth}")
         print(f"  use gap token: {self.use_gap_token}")
         print(f"  gap position: {self.gap_position}")
         print(f"  context tokens: {self.n_ctx}")
+
+    @staticmethod
+    def _compressed_depth(depth, group_size, config_name):
+        if group_size <= 0:
+            raise ValueError(f"{config_name} must be positive, got {group_size}")
+        if depth % group_size != 0:
+            raise ValueError(
+                f"{config_name}={group_size} must divide visual depth {depth}"
+            )
+        return depth // group_size
 
     @staticmethod
     def _ensure_finite(name, tensor):
@@ -118,13 +133,21 @@ class CustomCLIPTSSPMTDA(nn.Module):
 
     def _compute_style_tokens(self, hidden_states):
         style_tokens = self.style_projector(hidden_states).float()
-        if self.layer_compression == "pair_mean":
-            batch_size, depth, text_dim = style_tokens.shape
-            style_tokens = style_tokens.reshape(
-                batch_size, depth // 2, 2, text_dim
-            ).mean(dim=2)
         self._ensure_finite("style_tokens", style_tokens)
         return style_tokens
+
+    @staticmethod
+    def _compress_tokens(tokens, group_size):
+        if group_size == 1:
+            return tokens
+        batch_size, depth, text_dim = tokens.shape
+        if depth % group_size != 0:
+            raise ValueError(
+                f"group_size={group_size} must divide token depth {depth}"
+            )
+        return tokens.reshape(
+            batch_size, depth // group_size, group_size, text_dim
+        ).mean(dim=2)
 
     def _assemble_context(self, source_tokens, target_tokens, gap_tokens=None):
         if gap_tokens is None:
@@ -136,48 +159,105 @@ class CustomCLIPTSSPMTDA(nn.Module):
         raise ValueError(f"Unsupported GAP_POSITION={self.gap_position}")
 
     @torch.no_grad()
-    def _update_prototypes(self, source_proto, target_proto):
+    def _update_prototypes(
+        self,
+        source_style_proto,
+        target_style_proto,
+        source_gap_proto,
+        target_gap_proto,
+    ):
         momentum = self.proto_momentum
         if not bool(self.proto_initialized.item()):
-            self.source_style_proto.copy_(source_proto.detach())
-            self.target_style_proto.copy_(target_proto.detach())
+            self.source_style_proto.copy_(source_style_proto.detach())
+            self.target_style_proto.copy_(target_style_proto.detach())
+            self.source_gap_proto.copy_(source_gap_proto.detach())
+            self.target_gap_proto.copy_(target_gap_proto.detach())
             self.proto_initialized.fill_(True)
             return
 
         self.source_style_proto.mul_(momentum).add_(
-            source_proto.detach(), alpha=1.0 - momentum
+            source_style_proto.detach(), alpha=1.0 - momentum
         )
         self.target_style_proto.mul_(momentum).add_(
-            target_proto.detach(), alpha=1.0 - momentum
+            target_style_proto.detach(), alpha=1.0 - momentum
+        )
+        self.source_gap_proto.mul_(momentum).add_(
+            source_gap_proto.detach(), alpha=1.0 - momentum
+        )
+        self.target_gap_proto.mul_(momentum).add_(
+            target_gap_proto.detach(), alpha=1.0 - momentum
         )
 
-    def _build_train_context(self, source_tokens, target_tokens_by_domain):
-        source_proto = source_tokens.mean(dim=0)
-        target_domain_protos = OrderedDict(
+    def _build_train_context(self, source_raw_tokens, target_raw_tokens_by_domain):
+        source_style_tokens = self._compress_tokens(
+            source_raw_tokens, self.style_group_size
+        )
+        target_style_tokens_by_domain = OrderedDict(
+            (
+                domain_name,
+                self._compress_tokens(tokens, self.style_group_size),
+            )
+            for domain_name, tokens in target_raw_tokens_by_domain.items()
+        )
+        source_style_proto = source_style_tokens.mean(dim=0)
+        target_style_domain_protos = OrderedDict(
             (domain_name, tokens.mean(dim=0))
-            for domain_name, tokens in target_tokens_by_domain.items()
+            for domain_name, tokens in target_style_tokens_by_domain.items()
         )
-        target_proto = torch.stack(list(target_domain_protos.values())).mean(dim=0)
-        self._update_prototypes(source_proto, target_proto)
+        target_style_proto = torch.stack(
+            list(target_style_domain_protos.values())
+        ).mean(dim=0)
 
-        batch_size = source_tokens.shape[0]
-        target_tokens = target_proto.unsqueeze(0).expand(batch_size, -1, -1)
+        source_gap_tokens = self._compress_tokens(
+            source_raw_tokens, self.gap_group_size
+        )
+        target_gap_tokens_by_domain = OrderedDict(
+            (
+                domain_name,
+                self._compress_tokens(tokens, self.gap_group_size),
+            )
+            for domain_name, tokens in target_raw_tokens_by_domain.items()
+        )
+        source_gap_proto = source_gap_tokens.mean(dim=0)
+        target_gap_domain_protos = OrderedDict(
+            (domain_name, tokens.mean(dim=0))
+            for domain_name, tokens in target_gap_tokens_by_domain.items()
+        )
+        target_gap_proto = torch.stack(
+            list(target_gap_domain_protos.values())
+        ).mean(dim=0)
+        self._update_prototypes(
+            source_style_proto=source_style_proto,
+            target_style_proto=target_style_proto,
+            source_gap_proto=source_gap_proto,
+            target_gap_proto=target_gap_proto,
+        )
+
+        batch_size = source_raw_tokens.shape[0]
+        target_style_tokens = target_style_proto.unsqueeze(0).expand(
+            batch_size, -1, -1
+        )
 
         gap_tokens = None
         if self.use_gap_token:
-            gap_proto = target_proto - source_proto
+            gap_proto = target_gap_proto - source_gap_proto
             gap_tokens = gap_proto.unsqueeze(0).expand(batch_size, -1, -1)
 
         context = self._assemble_context(
-            source_tokens=source_tokens,
-            target_tokens=target_tokens,
+            source_tokens=source_style_tokens,
+            target_tokens=target_style_tokens,
             gap_tokens=gap_tokens,
         )
         self._ensure_finite("context_train", context)
         return context, {
-            "source_proto": source_proto,
-            "target_proto": target_proto,
-            "target_domain_protos": target_domain_protos,
+            "source_style_tokens": source_style_tokens,
+            "target_style_tokens_by_domain": target_style_tokens_by_domain,
+            "source_style_proto": source_style_proto,
+            "target_style_proto": target_style_proto,
+            "target_style_domain_protos": target_style_domain_protos,
+            "source_gap_proto": source_gap_proto,
+            "target_gap_proto": target_gap_proto,
+            "target_gap_domain_protos": target_gap_domain_protos,
             "gap_tokens": gap_tokens,
         }
 
@@ -193,15 +273,25 @@ class CustomCLIPTSSPMTDA(nn.Module):
                 self.style_depth, self.text_dim, device=device, dtype=torch.float32
             )
             target_proto = torch.zeros_like(source_proto)
+            source_gap_proto = torch.zeros(
+                self.gap_depth, self.text_dim, device=device, dtype=torch.float32
+            )
+            target_gap_proto = torch.zeros_like(source_gap_proto)
         else:
             source_proto = self.source_style_proto.to(device=device, dtype=torch.float32)
             target_proto = self.target_style_proto.to(device=device, dtype=torch.float32)
+            source_gap_proto = self.source_gap_proto.to(
+                device=device, dtype=torch.float32
+            )
+            target_gap_proto = self.target_gap_proto.to(
+                device=device, dtype=torch.float32
+            )
 
         source_tokens = source_proto.unsqueeze(0).expand(batch_size, -1, -1)
         target_tokens = target_proto.unsqueeze(0).expand(batch_size, -1, -1)
         gap_tokens = None
         if self.use_gap_token:
-            gap_tokens = (target_proto - source_proto).unsqueeze(0).expand(
+            gap_tokens = (target_gap_proto - source_gap_proto).unsqueeze(0).expand(
                 batch_size, -1, -1
             )
 
@@ -248,8 +338,8 @@ class CustomCLIPTSSPMTDA(nn.Module):
         image_s,
         image_u_dict,
         hidden_s,
-        source_tokens,
-        target_tokens_by_domain,
+        source_raw_tokens,
+        target_raw_tokens_by_domain,
         context,
         stats,
         logits,
@@ -266,35 +356,61 @@ class CustomCLIPTSSPMTDA(nn.Module):
             print(f"target batch shape [{domain_name}]:", tuple(image_u.shape))
         print("hidden layers:", len(hidden_s))
         print("first hidden shape:", tuple(hidden_s[0].shape))
-        print("source style tokens shape:", tuple(source_tokens.shape))
-        for domain_name, tokens in target_tokens_by_domain.items():
-            print(f"target style tokens shape [{domain_name}]:", tuple(tokens.shape))
-        print("source style proto shape:", tuple(stats["source_proto"].shape))
-        print("target-set style proto shape:", tuple(stats["target_proto"].shape))
+        print("source raw style tokens shape:", tuple(source_raw_tokens.shape))
+        for domain_name, tokens in target_raw_tokens_by_domain.items():
+            print(
+                f"target raw style tokens shape [{domain_name}]:",
+                tuple(tokens.shape),
+            )
+        print(
+            "source compressed style tokens shape:",
+            tuple(stats["source_style_tokens"].shape),
+        )
+        print(
+            "source style proto shape:",
+            tuple(stats["source_style_proto"].shape),
+        )
+        print(
+            "target-set style proto shape:",
+            tuple(stats["target_style_proto"].shape),
+        )
+        print("source gap proto shape:", tuple(stats["source_gap_proto"].shape))
+        print("target-set gap proto shape:", tuple(stats["target_gap_proto"].shape))
         if stats["gap_tokens"] is not None:
             print("gap style tokens shape:", tuple(stats["gap_tokens"].shape))
         print("context shape:", tuple(context.shape))
-        print("layer_compression:", self.layer_compression)
+        print("style_group_size:", self.style_group_size)
+        print("gap_group_size:", self.gap_group_size)
         print("use_gap_token:", self.use_gap_token)
         print("gap_position:", self.gap_position)
         print("logits shape:", tuple(logits.shape))
         print("loss:", float(loss.detach().item()))
-        print("source token norm:", float(source_tokens.detach().norm().item()))
-        print("target proto norm:", float(stats["target_proto"].detach().norm().item()))
+        print(
+            "source token norm:",
+            float(stats["source_style_tokens"].detach().norm().item()),
+        )
+        print(
+            "target proto norm:",
+            float(stats["target_style_proto"].detach().norm().item()),
+        )
         if stats["gap_tokens"] is not None:
             print("gap token norm:", float(stats["gap_tokens"].detach().norm().item()))
         self._has_printed_debug = True
 
     def forward_train(self, image_s, label_s, image_u_dict):
         image_features_s, hidden_s = self._encode_visual(image_s)
-        source_tokens = self._compute_style_tokens(hidden_s)
+        source_raw_tokens = self._compute_style_tokens(hidden_s)
 
-        target_tokens_by_domain = OrderedDict()
+        target_raw_tokens_by_domain = OrderedDict()
         for domain_name, image_u in image_u_dict.items():
             _, hidden_u = self._encode_visual(image_u)
-            target_tokens_by_domain[domain_name] = self._compute_style_tokens(hidden_u)
+            target_raw_tokens_by_domain[domain_name] = self._compute_style_tokens(
+                hidden_u
+            )
 
-        context, stats = self._build_train_context(source_tokens, target_tokens_by_domain)
+        context, stats = self._build_train_context(
+            source_raw_tokens, target_raw_tokens_by_domain
+        )
         logits = self._compute_logits(image_features_s, context)
         loss_ce = F.cross_entropy(logits, label_s)
         self._ensure_finite("loss_ce", loss_ce)
@@ -303,8 +419,8 @@ class CustomCLIPTSSPMTDA(nn.Module):
             image_s=image_s,
             image_u_dict=image_u_dict,
             hidden_s=hidden_s,
-            source_tokens=source_tokens,
-            target_tokens_by_domain=target_tokens_by_domain,
+            source_raw_tokens=source_raw_tokens,
+            target_raw_tokens_by_domain=target_raw_tokens_by_domain,
             context=context,
             stats=stats,
             logits=logits,
@@ -312,8 +428,8 @@ class CustomCLIPTSSPMTDA(nn.Module):
         )
 
         acc = compute_accuracy(logits, label_s)[0].item()
-        source_norm = source_tokens.detach().float().norm()
-        target_norm = stats["target_proto"].detach().float().norm()
+        source_norm = stats["source_style_tokens"].detach().float().norm()
+        target_norm = stats["target_style_proto"].detach().float().norm()
         gap_norm = torch.zeros((), device=loss_ce.device)
         if stats["gap_tokens"] is not None:
             gap_norm = stats["gap_tokens"].detach().float().norm()
@@ -346,7 +462,8 @@ class CLIPTSSPMTDA(MultiTargetTrainerXU):
         tssp_cfg = cfg.TRAINER.CLIP_TSSP_MTDA
         assert tssp_cfg.PREC in ["fp16", "fp32", "amp"]
         assert tssp_cfg.HIDDEN_DIM > 0
-        assert tssp_cfg.LAYER_COMPRESSION in ["none", "pair_mean"]
+        assert tssp_cfg.STYLE_GROUP_SIZE in [1, 2, 3, 4]
+        assert tssp_cfg.GAP_GROUP_SIZE in [1, 2, 3, 4]
         assert tssp_cfg.GAP_POSITION in ["after_target", "middle"]
         assert 0.0 <= tssp_cfg.PROTO_MOMENTUM < 1.0
         assert tssp_cfg.STYLE_EPS > 0.0
@@ -450,6 +567,25 @@ class CLIPTSSPMTDA(MultiTargetTrainerXU):
             state_dict.pop("token_prefix", None)
             state_dict.pop("token_suffix", None)
             state_dict.pop("tokenized_prompts", None)
+            model_ref = self._models[name]
+            if (
+                "source_gap_proto" not in state_dict
+                and "source_style_proto" in state_dict
+                and state_dict["source_style_proto"].shape
+                == model_ref.source_gap_proto.shape
+            ):
+                state_dict["source_gap_proto"] = state_dict[
+                    "source_style_proto"
+                ].clone()
+            if (
+                "target_gap_proto" not in state_dict
+                and "target_style_proto" in state_dict
+                and state_dict["target_style_proto"].shape
+                == model_ref.target_gap_proto.shape
+            ):
+                state_dict["target_gap_proto"] = state_dict[
+                    "target_style_proto"
+                ].clone()
 
             loaded_epoch = checkpoint["epoch"]
             print(f'Loading weights to {name} from "{model_path}" (epoch = {loaded_epoch})')

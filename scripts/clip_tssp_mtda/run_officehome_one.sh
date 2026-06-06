@@ -13,7 +13,7 @@ fi
 cd "${REPO_ROOT}"
 
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
-  echo "Usage: bash scripts/clip_tssp_mtda/run_officehome_one.sh <A|C|P|R> <SEED> <clip_tssp_full|clip_tssp_no_gap|clip_tssp_gap|clip_tssp_pair|clip_tssp_pair_gap> [--debug]" >&2
+  echo "Usage: bash scripts/clip_tssp_mtda/run_officehome_one.sh <A|C|P|R> <SEED> <TSSP_METHOD> [--debug]" >&2
   exit 1
 fi
 
@@ -70,7 +70,8 @@ case "${METHOD}" in
     DEFAULT_TAG="clip_tssp_full"
     METHOD_OPTS=(
       "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
-      "TRAINER.CLIP_TSSP_MTDA.LAYER_COMPRESSION" "none"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "1"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "1"
       "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "after_target"
     )
     ;;
@@ -78,7 +79,8 @@ case "${METHOD}" in
     DEFAULT_TAG="clip_tssp_no_gap"
     METHOD_OPTS=(
       "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "False"
-      "TRAINER.CLIP_TSSP_MTDA.LAYER_COMPRESSION" "none"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "1"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "1"
       "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "after_target"
     )
     ;;
@@ -86,7 +88,8 @@ case "${METHOD}" in
     DEFAULT_TAG="clip_tssp_gap"
     METHOD_OPTS=(
       "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
-      "TRAINER.CLIP_TSSP_MTDA.LAYER_COMPRESSION" "none"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "1"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "1"
       "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
     )
     ;;
@@ -94,7 +97,8 @@ case "${METHOD}" in
     DEFAULT_TAG="clip_tssp_pair"
     METHOD_OPTS=(
       "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "False"
-      "TRAINER.CLIP_TSSP_MTDA.LAYER_COMPRESSION" "pair_mean"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "1"
       "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "after_target"
     )
     ;;
@@ -102,7 +106,62 @@ case "${METHOD}" in
     DEFAULT_TAG="clip_tssp_pair_gap"
     METHOD_OPTS=(
       "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
-      "TRAINER.CLIP_TSSP_MTDA.LAYER_COMPRESSION" "pair_mean"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+    )
+    ;;
+  clip_tssp_style3_gap1|style3_gap1)
+    DEFAULT_TAG="clip_tssp_style3_gap1"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "3"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "1"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+    )
+    ;;
+  clip_tssp_style4_gap1|style4_gap1)
+    DEFAULT_TAG="clip_tssp_style4_gap1"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "4"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "1"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+    )
+    ;;
+  clip_tssp_style3_gap3|style3_gap3)
+    DEFAULT_TAG="clip_tssp_style3_gap3"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "3"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "3"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+    )
+    ;;
+  clip_tssp_style4_gap4|style4_gap4)
+    DEFAULT_TAG="clip_tssp_style4_gap4"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "4"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "4"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+    )
+    ;;
+  clip_tssp_style1_gap3|style1_gap3)
+    DEFAULT_TAG="clip_tssp_style1_gap3"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "1"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "3"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+    )
+    ;;
+  clip_tssp_style1_gap4|style1_gap4)
+    DEFAULT_TAG="clip_tssp_style1_gap4"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "1"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "4"
       "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
     )
     ;;

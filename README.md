@@ -214,6 +214,24 @@ bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap
 ```
 
+进一步压缩实验均保留 middle-gap `[source, gap, target]`：
+
+```bash
+# 只压缩 source/target style tokens，gap 保持 12 层
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style3_gap1
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style4_gap1
+
+# source/target style 与 gap 同尺度压缩
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style3_gap3
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style4_gap4
+
+# source/target style 保持 12 层，只压缩 gap
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style1_gap3
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style1_gap4
+```
+
+`STYLE_GROUP_SIZE=3/4` 表示每三/四个相邻 ViT layer style tokens 固定取均值；`GAP_GROUP_SIZE` 独立控制 gap token 的分组尺度。
+
 单个 source smoke test：
 
 ```bash
