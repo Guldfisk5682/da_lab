@@ -45,6 +45,8 @@ TRAINER:
     GAP_POSITION: "after_target"
     PROTO_MOMENTUM: 0.9
     STYLE_EPS: 1e-6
+    LAMBDA_EM: 0.0
+    ENTROPY_EPS: 1e-8
     PROMPT_TEMPLATE: "{}."
     DEBUG:
       PRINT_ONCE: false

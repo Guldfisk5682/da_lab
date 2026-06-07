@@ -43,6 +43,8 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self.image_group_size = int(tssp_cfg.IMAGE_GROUP_SIZE)
         self.gap_position = str(tssp_cfg.GAP_POSITION).lower()
         self.proto_momentum = float(tssp_cfg.PROTO_MOMENTUM)
+        self.lambda_em = float(tssp_cfg.LAMBDA_EM)
+        self.entropy_eps = float(tssp_cfg.ENTROPY_EPS)
         self.debug_print_once = bool(tssp_cfg.DEBUG.PRINT_ONCE)
         self._has_printed_debug = False
         self._has_warned_empty_proto = False
@@ -131,6 +133,7 @@ class CustomCLIPTSSPMTDA(nn.Module):
         print(f"  use image tokens: {self.use_image_tokens}")
         print(f"  image group size: {self.image_group_size}")
         print(f"  image token layers: {self.image_depth}")
+        print(f"  target entropy weight: {self.lambda_em}")
         print(f"  context tokens: {self.n_ctx}")
 
     @staticmethod
@@ -310,6 +313,39 @@ class CustomCLIPTSSPMTDA(nn.Module):
             "image_tokens": source_image_tokens,
         }
 
+    def _build_target_contexts(
+        self,
+        stats,
+        target_batch_sizes,
+        target_image_tokens_by_domain,
+    ):
+        contexts = OrderedDict()
+        for domain_name, batch_size in target_batch_sizes.items():
+            source_tokens = stats["source_style_proto"].unsqueeze(0).expand(
+                batch_size, -1, -1
+            )
+            target_tokens = stats["target_style_domain_protos"][
+                domain_name
+            ].unsqueeze(0).expand(batch_size, -1, -1)
+
+            gap_tokens = None
+            if self.use_gap_token:
+                gap_proto = (
+                    stats["target_gap_domain_protos"][domain_name]
+                    - stats["source_gap_proto"]
+                )
+                gap_tokens = gap_proto.unsqueeze(0).expand(batch_size, -1, -1)
+
+            context = self._assemble_context(
+                source_tokens=source_tokens,
+                target_tokens=target_tokens,
+                gap_tokens=gap_tokens,
+                image_tokens=target_image_tokens_by_domain.get(domain_name),
+            )
+            self._ensure_finite(f"context_target[{domain_name}]", context)
+            contexts[domain_name] = context
+        return contexts
+
     def _build_eval_context(self, batch_size, device, image_tokens=None):
         if not bool(self.proto_initialized.item()):
             if not self._has_warned_empty_proto:
@@ -383,6 +419,13 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self._ensure_finite("logits", logits)
         return logits
 
+    def _conditional_entropy(self, logits):
+        probs = F.softmax(logits.float(), dim=-1)
+        log_probs = probs.clamp_min(self.entropy_eps).log()
+        entropy = -(probs * log_probs).sum(dim=-1).mean()
+        self._ensure_finite("conditional_entropy", entropy)
+        return entropy
+
     def _log_debug_once(
         self,
         image_s,
@@ -394,7 +437,10 @@ class CustomCLIPTSSPMTDA(nn.Module):
         context,
         stats,
         logits,
-        loss,
+        target_logits_by_domain,
+        loss_ce,
+        loss_em,
+        loss_total,
     ):
         if not self.debug_print_once or self._has_printed_debug:
             return
@@ -438,8 +484,16 @@ class CustomCLIPTSSPMTDA(nn.Module):
         print("gap_position:", self.gap_position)
         print("use_image_tokens:", self.use_image_tokens)
         print("image_group_size:", self.image_group_size)
+        print("lambda_em:", self.lambda_em)
         print("logits shape:", tuple(logits.shape))
-        print("loss:", float(loss.detach().item()))
+        for domain_name, target_logits in target_logits_by_domain.items():
+            print(
+                f"target logits shape [{domain_name}]:",
+                tuple(target_logits.shape),
+            )
+        print("loss_ce:", float(loss_ce.detach().item()))
+        print("loss_em:", float(loss_em.detach().item()))
+        print("loss_total:", float(loss_total.detach().item()))
         print(
             "source token norm:",
             float(stats["source_style_tokens"].detach().norm().item()),
@@ -463,11 +517,18 @@ class CustomCLIPTSSPMTDA(nn.Module):
         source_image_tokens = self._compute_image_tokens(hidden_s)
 
         target_raw_tokens_by_domain = OrderedDict()
+        target_features_by_domain = OrderedDict()
+        target_image_tokens_by_domain = OrderedDict()
         for domain_name, image_u in image_u_dict.items():
-            _, hidden_u = self._encode_visual(image_u)
+            image_features_u, hidden_u = self._encode_visual(image_u)
             target_raw_tokens_by_domain[domain_name] = self._compute_style_tokens(
                 hidden_u
             )
+            if self.lambda_em > 0.0:
+                target_features_by_domain[domain_name] = image_features_u
+                target_image_tokens_by_domain[domain_name] = (
+                    self._compute_image_tokens(hidden_u)
+                )
 
         context, stats = self._build_train_context(
             source_raw_tokens,
@@ -477,6 +538,32 @@ class CustomCLIPTSSPMTDA(nn.Module):
         logits = self._compute_logits(image_features_s, context)
         loss_ce = F.cross_entropy(logits, label_s)
         self._ensure_finite("loss_ce", loss_ce)
+
+        target_logits_by_domain = OrderedDict()
+        entropy_by_domain = OrderedDict()
+        if self.lambda_em > 0.0:
+            target_contexts = self._build_target_contexts(
+                stats=stats,
+                target_batch_sizes=OrderedDict(
+                    (domain_name, features.shape[0])
+                    for domain_name, features in target_features_by_domain.items()
+                ),
+                target_image_tokens_by_domain=target_image_tokens_by_domain,
+            )
+            for domain_name, image_features_u in target_features_by_domain.items():
+                target_logits = self._compute_logits(
+                    image_features_u, target_contexts[domain_name]
+                )
+                target_logits_by_domain[domain_name] = target_logits
+                entropy_by_domain[domain_name] = self._conditional_entropy(
+                    target_logits
+                )
+            loss_em = torch.stack(list(entropy_by_domain.values())).mean()
+        else:
+            loss_em = loss_ce.new_zeros(())
+
+        loss_total = loss_ce + self.lambda_em * loss_em
+        self._ensure_finite("loss_total", loss_total)
 
         self._log_debug_once(
             image_s=image_s,
@@ -488,7 +575,10 @@ class CustomCLIPTSSPMTDA(nn.Module):
             context=context,
             stats=stats,
             logits=logits,
-            loss=loss_ce,
+            target_logits_by_domain=target_logits_by_domain,
+            loss_ce=loss_ce,
+            loss_em=loss_em,
+            loss_total=loss_total,
         )
 
         acc = compute_accuracy(logits, label_s)[0].item()
@@ -501,15 +591,20 @@ class CustomCLIPTSSPMTDA(nn.Module):
         if source_image_tokens is not None:
             image_norm = source_image_tokens.detach().float().norm()
 
-        return {
-            "loss": loss_ce,
+        outputs = {
+            "loss": loss_total,
             "loss_ce": loss_ce.detach(),
+            "loss_em": loss_em.detach(),
+            "weighted_loss_em": (self.lambda_em * loss_em).detach(),
             "acc_src": torch.tensor(acc, device=loss_ce.device),
             "source_style_norm": source_norm,
             "target_style_norm": target_norm,
             "gap_style_norm": gap_norm,
             "image_token_norm": image_norm,
         }
+        for domain_name, entropy in entropy_by_domain.items():
+            outputs[f"loss_em_{domain_name}"] = entropy.detach()
+        return outputs
 
     def forward_inference(self, image, domain_name=None):
         del domain_name
@@ -538,6 +633,8 @@ class CLIPTSSPMTDA(MultiTargetTrainerXU):
         assert tssp_cfg.GAP_POSITION in ["after_target", "middle"]
         assert 0.0 <= tssp_cfg.PROTO_MOMENTUM < 1.0
         assert tssp_cfg.STYLE_EPS > 0.0
+        assert tssp_cfg.LAMBDA_EM >= 0.0
+        assert tssp_cfg.ENTROPY_EPS > 0.0
         assert "{}" in tssp_cfg.PROMPT_TEMPLATE
 
     def build_model(self):

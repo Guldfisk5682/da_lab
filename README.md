@@ -247,6 +247,18 @@ bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img4
 
 每层 image token 使用完整 hidden tokens 的均值池化，再经过该层独立的 `Linear(vision_dim, text_dim)`。AD-CLIP 源码中的四个 image tokens 并不是相邻三层分组；本仓库使用明确的相邻层分组，以便比较 12/6/4 层内容保留尺度。
 
+固定 `lambda_em=0.01` 的 target conditional entropy 对照：
+
+```bash
+# PairGap + L_em，不使用 image tokens
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_em
+
+# PairGap + Img6 + L_em
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img6_em
+```
+
+`L_em` 对三个目标域分别计算标准样本条件熵，再对域等权平均。CLIP 主体保持冻结；该系数不是可学习参数，`LAMBDA_EM=0.0` 时完全跳过目标 logits 路径。
+
 单个 source smoke test：
 
 ```bash

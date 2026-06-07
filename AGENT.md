@@ -74,6 +74,8 @@ bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style1_gap4
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img12
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img6
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img4
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_em
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img6_em
 python scripts/clip_tssp_mtda/collect_officehome_results.py
 ```
 
@@ -211,6 +213,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-06-06: Added three focused TSSP ablations. `clip_tssp_gap` changes the 12-layer prompt order from `[source, target, gap]` to `[source, gap, target]`; `clip_tssp_pair` averages adjacent projected layer tokens into six `[source, target]` token groups; `clip_tssp_pair_gap` combines six-layer pair compression with `[source, gap, target]`. The TSSP collector now reports per-target-domain averages and the overall mean across all 12 SS-MTDA transfer accuracies.
 - 2026-06-06: Split TSSP compression into independent `STYLE_GROUP_SIZE` and `GAP_GROUP_SIZE` controls. Added six middle-gap runs covering style-only 3/4-layer grouping, matched style+gap 3/4-layer grouping, and gap-only 3/4-layer grouping. The projector still produces all 12 raw layer tokens; fixed adjacent-layer means are applied separately before prompt assembly.
 - 2026-06-06: Fixed PairGap (`S6/G6/T6`) as the TSSP style backbone and added per-image content tokens. Each visual layer is mean-pooled across tokens and independently projected into text space. The `img12`, `img6`, and `img4` runs retain all layers or average adjacent groups of two/three before appending image tokens as `[S6, G6, T6, I]`. Training still uses source CE only.
+- 2026-06-07: Added a fixed-weight target conditional entropy ablation. `clip_tssp_pair_gap_em` applies domainwise `L_em` to PairGap without image tokens, while `clip_tssp_pair_gap_img6_em` applies the same `lambda_em=0.01` with source/target Img6 tokens. Entropy is computed per target sample over classes and then averaged equally across target domains; `lambda_em=0` preserves and skips the old target-logit path.
 - 2026-06-03: Merged `ss-mtda-style-prompt` into `main` as infrastructure, then opened `cocoop-vpt-mtda` for the new multi-prompt DA direction. The merge keeps Office-Home MTDA dataloading, `CoCoOpMTDA`, Office-Home download/verify scripts, result collection, and server CUDA fixes.
 - 2026-06-03: Marked `StylePromptMTDA` as a deprecated negative-result path. Experiments showed pure text-side target-style prompt modulation gives only tiny and unstable gains over `CoCoOpMTDA`, so future work should not keep tuning style queue/domain-mean prompt bias.
 - 2026-06-03: Added the first new active method, `CoCoOpVPTMTDA`: CoCoOp text prompt learning plus an independent shallow visual prompt tensor appended to CLIP ViT tokens. This is the first multi-prompt tuning DA experiment and should be compared against `CoCoOpMTDA`.
