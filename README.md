@@ -284,6 +284,20 @@ TSSP 结果汇总：
 python scripts/clip_tssp_mtda/collect_officehome_results.py
 ```
 
+TensorBoard 曲线汇总图：
+
+```bash
+# 单个方法，输出 results/officehome_tensorboard_clip_tssp_pair_gap_seeds1_eval.png 与 train.png
+python scripts/clip_tssp_mtda/plot_tensorboard_curves.py --method clip_tssp_pair_gap --seed 1
+
+# 多个方法同图比较
+python scripts/clip_tssp_mtda/plot_tensorboard_curves.py \
+  --methods clip_tssp_pair_gap clip_tssp_pair_gap_vctx8 clip_tssp_pair_gap_em \
+  --seed 1
+```
+
+绘图脚本会覆盖同名旧图片，并同时写出对应的 `_summary.csv`。评测图展示每个 source task 下各 target domain 的 accuracy/macro 曲线；训练图展示 loss、lr、source acc、style/gap norm、pseudo-label/KL/coverage 等重要标量。
+
 collector 会输出逐 source 结果、按目标域 `A/C/P/R` 聚合的平均准确率，以及全部 12 个迁移任务的 overall average。
 
 上一阶段 CoCoOp/StylePrompt/VPT 入口如下，主要用于对照历史结果。
