@@ -283,6 +283,31 @@ bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_adamw1e4
 
 AdamW 变体使用独立输出目录，避免覆盖或加载已有 `clip_tssp_pair_gap` 的 SGD checkpoint。
 
+PairGap + frozen CLIP 约束对照：
+
+```bash
+# K0: PairGap + AdamW lr=1e-4 + KL(student || frozen CLIP reference)
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_kl
+
+# P0: PairGap + AdamW lr=1e-4 + conservative frozen-CLIP pseudo labels
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_pl
+
+# KP0: PairGap + AdamW lr=1e-4 + KL + pseudo labels
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_pl_kl
+```
+
+KL/PL 变体不额外加载第二份 CLIP；reference logits 使用 frozen clean image feature 与 frozen zero-shot text prompt 计算。PL 只在 frozen CLIP 高置信且当前 student 低置信的 target 样本上生效，默认 `PL_THRESHOLD=0.7`、`PL_STUDENT_THRESHOLD=0.7`。
+
+一晚连续跑五个 PairGap 变体：
+
+```bash
+# 默认 seed1，依次跑 O0/O1/K0/P0/KP0，结束后自动 collect 和画 TensorBoard 曲线
+bash scripts/clip_tssp_mtda/run_pairgap_5variants.sh
+
+# 如需换 seed
+SEED=2 bash scripts/clip_tssp_mtda/run_pairgap_5variants.sh
+```
+
 单个 source smoke test：
 
 ```bash

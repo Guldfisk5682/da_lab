@@ -48,6 +48,14 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self.lambda_em = float(tssp_cfg.LAMBDA_EM)
         self.detach_entropy_text = bool(tssp_cfg.DETACH_ENTROPY_TEXT)
         self.entropy_eps = float(tssp_cfg.ENTROPY_EPS)
+        self.lambda_kl = float(tssp_cfg.LAMBDA_KL)
+        self.kl_temperature = float(tssp_cfg.KL_TEMPERATURE)
+        self.lambda_pl = float(tssp_cfg.LAMBDA_PL)
+        self.pl_threshold = float(tssp_cfg.PL_THRESHOLD)
+        self.pl_student_threshold = float(tssp_cfg.PL_STUDENT_THRESHOLD)
+        self.pl_use_student_low_conf_mask = bool(
+            tssp_cfg.PL_USE_STUDENT_LOW_CONF_MASK
+        )
         self.debug_print_once = bool(tssp_cfg.DEBUG.PRINT_ONCE)
         self._has_printed_debug = False
         self._has_warned_empty_proto = False
@@ -115,16 +123,26 @@ class CustomCLIPTSSPMTDA(nn.Module):
         template = str(tssp_cfg.PROMPT_TEMPLATE)
         if "{}" not in template:
             raise ValueError("TRAINER.CLIP_TSSP_MTDA.PROMPT_TEMPLATE must contain '{}'")
+        zs_template = str(tssp_cfg.ZS_PROMPT_TEMPLATE)
+        if "{}" not in zs_template:
+            raise ValueError(
+                "TRAINER.CLIP_TSSP_MTDA.ZS_PROMPT_TEMPLATE must contain '{}'"
+            )
 
         prompt_prefix = " ".join(["X"] * self.n_ctx)
         classnames = [name.replace("_", " ") for name in classnames]
         prompts = [prompt_prefix + " " + template.format(name) for name in classnames]
         tokenized_prompts = torch.cat([clip.tokenize(prompt) for prompt in prompts])
+        zs_prompts = [zs_template.format(name) for name in classnames]
+        zs_tokenized_prompts = torch.cat(
+            [clip.tokenize(prompt) for prompt in zs_prompts]
+        )
 
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts).type(self.dtype)
 
         self.register_buffer("tokenized_prompts", tokenized_prompts)
+        self.register_buffer("zs_tokenized_prompts", zs_tokenized_prompts)
         self.register_buffer("token_prefix", embedding[:, :1, :])
         self.register_buffer("token_suffix", embedding[:, 1 + self.n_ctx :, :])
         self.n_cls = len(classnames)
@@ -145,6 +163,13 @@ class CustomCLIPTSSPMTDA(nn.Module):
         print(f"  VCTX tokens: {self.n_vctx if self.enable_vpt else 0}")
         print(f"  target entropy weight: {self.lambda_em}")
         print(f"  detach entropy text: {self.detach_entropy_text}")
+        print(f"  KL weight: {self.lambda_kl}")
+        print(f"  KL temperature: {self.kl_temperature}")
+        print(f"  pseudo-label weight: {self.lambda_pl}")
+        print(f"  pseudo-label threshold: {self.pl_threshold}")
+        print(f"  pseudo-label student threshold: {self.pl_student_threshold}")
+        print(f"  pseudo-label low-conf only: {self.pl_use_student_low_conf_mask}")
+        print(f"  zero-shot prompt template: {zs_template}")
         print(f"  context tokens: {self.n_ctx}")
 
     @staticmethod
@@ -439,12 +464,76 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self._ensure_finite("logits", logits)
         return logits
 
+    def _uses_target_logits(self):
+        return (
+            self.lambda_em > 0.0
+            or self.lambda_kl > 0.0
+            or self.lambda_pl > 0.0
+        )
+
+    def _zero_shot_text_features(self, device):
+        tokenized_prompts = self.zs_tokenized_prompts.to(device)
+        prompts = self.token_embedding(tokenized_prompts).type(self.dtype)
+        text_features = self.text_encoder(prompts, tokenized_prompts).float()
+        text_features = text_features / text_features.norm(
+            dim=-1, keepdim=True
+        ).clamp_min(1e-6)
+        self._ensure_finite("zero_shot_text_features", text_features)
+        return text_features
+
+    @torch.no_grad()
+    def _compute_reference_logits(self, image_features):
+        image_features = image_features.float()
+        image_features = image_features / image_features.norm(
+            dim=-1, keepdim=True
+        ).clamp_min(1e-6)
+        text_features = self._zero_shot_text_features(image_features.device)
+        logits = self.logit_scale.float().exp() * image_features @ text_features.t()
+        self._ensure_finite("reference_logits", logits)
+        return logits.detach()
+
     def _conditional_entropy(self, logits):
         probs = F.softmax(logits.float(), dim=-1)
         log_probs = probs.clamp_min(self.entropy_eps).log()
         entropy = -(probs * log_probs).sum(dim=-1).mean()
         self._ensure_finite("conditional_entropy", entropy)
         return entropy
+
+    def _reference_kl_loss(self, student_logits, reference_logits):
+        temperature = self.kl_temperature
+        student_log_probs = F.log_softmax(student_logits.float() / temperature, dim=-1)
+        student_probs = student_log_probs.exp()
+        reference_log_probs = F.log_softmax(
+            reference_logits.float() / temperature, dim=-1
+        ).detach()
+        kl = (
+            student_probs * (student_log_probs - reference_log_probs)
+        ).sum(dim=-1).mean()
+        kl = kl * (temperature ** 2)
+        self._ensure_finite("reference_kl_loss", kl)
+        return kl
+
+    def _pseudo_label_loss(self, student_logits, reference_logits):
+        reference_probs = F.softmax(reference_logits.float(), dim=-1)
+        reference_conf, reference_label = reference_probs.max(dim=-1)
+        student_probs = F.softmax(student_logits.detach().float(), dim=-1)
+        student_conf, student_label = student_probs.max(dim=-1)
+
+        mask = reference_conf.ge(self.pl_threshold)
+        if self.pl_use_student_low_conf_mask:
+            mask = mask & student_conf.lt(self.pl_student_threshold)
+
+        mask_float = mask.float()
+        ce = F.cross_entropy(student_logits, reference_label, reduction="none")
+        loss = (ce * mask_float).sum() / mask_float.sum().clamp_min(1.0)
+        self._ensure_finite("pseudo_label_loss", loss)
+        stats = {
+            "coverage": mask_float.mean(),
+            "clip_conf": reference_conf.mean(),
+            "student_conf": student_conf.mean(),
+            "agreement": (student_label == reference_label).float().mean(),
+        }
+        return loss, stats
 
     def _log_debug_once(
         self,
@@ -458,8 +547,12 @@ class CustomCLIPTSSPMTDA(nn.Module):
         stats,
         logits,
         target_logits_by_domain,
+        reference_logits_by_domain,
         loss_ce,
         loss_em,
+        loss_kl,
+        loss_pl,
+        pl_coverage,
         loss_total,
     ):
         if not self.debug_print_once or self._has_printed_debug:
@@ -513,14 +606,28 @@ class CustomCLIPTSSPMTDA(nn.Module):
             )
         print("lambda_em:", self.lambda_em)
         print("detach_entropy_text:", self.detach_entropy_text)
+        print("lambda_kl:", self.lambda_kl)
+        print("kl_temperature:", self.kl_temperature)
+        print("lambda_pl:", self.lambda_pl)
+        print("pl_threshold:", self.pl_threshold)
+        print("pl_student_threshold:", self.pl_student_threshold)
+        print("pl_low_conf_only:", self.pl_use_student_low_conf_mask)
         print("logits shape:", tuple(logits.shape))
         for domain_name, target_logits in target_logits_by_domain.items():
             print(
                 f"target logits shape [{domain_name}]:",
                 tuple(target_logits.shape),
             )
+        for domain_name, reference_logits in reference_logits_by_domain.items():
+            print(
+                f"reference logits shape [{domain_name}]:",
+                tuple(reference_logits.shape),
+            )
         print("loss_ce:", float(loss_ce.detach().item()))
         print("loss_em:", float(loss_em.detach().item()))
+        print("loss_kl:", float(loss_kl.detach().item()))
+        print("loss_pl:", float(loss_pl.detach().item()))
+        print("pl_coverage:", float(pl_coverage.detach().item()))
         print("loss_total:", float(loss_total.detach().item()))
         print(
             "source token norm:",
@@ -540,6 +647,7 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self._has_printed_debug = True
 
     def forward_train(self, image_s, label_s, image_u_dict):
+        need_target_logits = self._uses_target_logits()
         clean_features_s, hidden_s = self._encode_clean_visual(image_s)
         image_features_s = self._encode_adapted_visual(
             image_s, clean_features=clean_features_s
@@ -550,17 +658,21 @@ class CustomCLIPTSSPMTDA(nn.Module):
         target_raw_tokens_by_domain = OrderedDict()
         target_features_by_domain = OrderedDict()
         target_image_tokens_by_domain = OrderedDict()
+        reference_logits_by_domain = OrderedDict()
         for domain_name, image_u in image_u_dict.items():
             clean_features_u, hidden_u = self._encode_clean_visual(image_u)
             target_raw_tokens_by_domain[domain_name] = self._compute_style_tokens(
                 hidden_u
             )
-            if self.lambda_em > 0.0:
+            if need_target_logits:
                 target_features_by_domain[domain_name] = self._encode_adapted_visual(
                     image_u, clean_features=clean_features_u
                 )
                 target_image_tokens_by_domain[domain_name] = (
                     self._compute_image_tokens(hidden_u)
+                )
+                reference_logits_by_domain[domain_name] = (
+                    self._compute_reference_logits(clean_features_u)
                 )
 
         context, stats = self._build_train_context(
@@ -574,7 +686,7 @@ class CustomCLIPTSSPMTDA(nn.Module):
 
         target_logits_by_domain = OrderedDict()
         entropy_by_domain = OrderedDict()
-        if self.lambda_em > 0.0:
+        if need_target_logits:
             target_contexts = self._build_target_contexts(
                 stats=stats,
                 target_batch_sizes=OrderedDict(
@@ -587,17 +699,67 @@ class CustomCLIPTSSPMTDA(nn.Module):
                 target_logits = self._compute_logits(
                     image_features_u,
                     target_contexts[domain_name],
-                    detach_text_features=self.detach_entropy_text,
+                    detach_text_features=(
+                        self.lambda_em > 0.0 and self.detach_entropy_text
+                    ),
                 )
                 target_logits_by_domain[domain_name] = target_logits
-                entropy_by_domain[domain_name] = self._conditional_entropy(
-                    target_logits
-                )
+                if self.lambda_em > 0.0:
+                    entropy_by_domain[domain_name] = self._conditional_entropy(
+                        target_logits
+                    )
+        if self.lambda_em > 0.0:
             loss_em = torch.stack(list(entropy_by_domain.values())).mean()
         else:
             loss_em = loss_ce.new_zeros(())
 
-        loss_total = loss_ce + self.lambda_em * loss_em
+        kl_by_domain = OrderedDict()
+        if self.lambda_kl > 0.0:
+            for domain_name, target_logits in target_logits_by_domain.items():
+                kl_by_domain[domain_name] = self._reference_kl_loss(
+                    target_logits,
+                    reference_logits_by_domain[domain_name],
+                )
+            loss_kl = torch.stack(list(kl_by_domain.values())).mean()
+        else:
+            loss_kl = loss_ce.new_zeros(())
+
+        pl_by_domain = OrderedDict()
+        pl_stats_by_domain = OrderedDict()
+        if self.lambda_pl > 0.0:
+            for domain_name, target_logits in target_logits_by_domain.items():
+                pl_loss, pl_stats = self._pseudo_label_loss(
+                    target_logits,
+                    reference_logits_by_domain[domain_name],
+                )
+                pl_by_domain[domain_name] = pl_loss
+                pl_stats_by_domain[domain_name] = pl_stats
+            loss_pl = torch.stack(list(pl_by_domain.values())).mean()
+            pl_coverage = torch.stack(
+                [stats_i["coverage"] for stats_i in pl_stats_by_domain.values()]
+            ).mean()
+            pl_clip_conf = torch.stack(
+                [stats_i["clip_conf"] for stats_i in pl_stats_by_domain.values()]
+            ).mean()
+            pl_student_conf = torch.stack(
+                [stats_i["student_conf"] for stats_i in pl_stats_by_domain.values()]
+            ).mean()
+            clip_student_agreement = torch.stack(
+                [stats_i["agreement"] for stats_i in pl_stats_by_domain.values()]
+            ).mean()
+        else:
+            loss_pl = loss_ce.new_zeros(())
+            pl_coverage = loss_ce.new_zeros(())
+            pl_clip_conf = loss_ce.new_zeros(())
+            pl_student_conf = loss_ce.new_zeros(())
+            clip_student_agreement = loss_ce.new_zeros(())
+
+        loss_total = (
+            loss_ce
+            + self.lambda_em * loss_em
+            + self.lambda_kl * loss_kl
+            + self.lambda_pl * loss_pl
+        )
         self._ensure_finite("loss_total", loss_total)
 
         self._log_debug_once(
@@ -611,8 +773,12 @@ class CustomCLIPTSSPMTDA(nn.Module):
             stats=stats,
             logits=logits,
             target_logits_by_domain=target_logits_by_domain,
+            reference_logits_by_domain=reference_logits_by_domain,
             loss_ce=loss_ce,
             loss_em=loss_em,
+            loss_kl=loss_kl,
+            loss_pl=loss_pl,
+            pl_coverage=pl_coverage,
             loss_total=loss_total,
         )
 
@@ -634,6 +800,14 @@ class CustomCLIPTSSPMTDA(nn.Module):
             "loss_ce": loss_ce.detach(),
             "loss_em": loss_em.detach(),
             "weighted_loss_em": (self.lambda_em * loss_em).detach(),
+            "loss_kl": loss_kl.detach(),
+            "weighted_loss_kl": (self.lambda_kl * loss_kl).detach(),
+            "loss_pl": loss_pl.detach(),
+            "weighted_loss_pl": (self.lambda_pl * loss_pl).detach(),
+            "pl_coverage": pl_coverage.detach(),
+            "pl_clip_conf": pl_clip_conf.detach(),
+            "pl_student_conf": pl_student_conf.detach(),
+            "clip_student_agreement": clip_student_agreement.detach(),
             "acc_src": torch.tensor(acc, device=loss_ce.device),
             "source_style_norm": source_norm,
             "target_style_norm": target_norm,
@@ -643,6 +817,19 @@ class CustomCLIPTSSPMTDA(nn.Module):
         }
         for domain_name, entropy in entropy_by_domain.items():
             outputs[f"loss_em_{domain_name}"] = entropy.detach()
+        for domain_name, kl in kl_by_domain.items():
+            outputs[f"loss_kl_{domain_name}"] = kl.detach()
+        for domain_name, pl in pl_by_domain.items():
+            outputs[f"loss_pl_{domain_name}"] = pl.detach()
+        for domain_name, stats_i in pl_stats_by_domain.items():
+            outputs[f"pl_coverage_{domain_name}"] = stats_i["coverage"].detach()
+            outputs[f"pl_clip_conf_{domain_name}"] = stats_i["clip_conf"].detach()
+            outputs[f"pl_student_conf_{domain_name}"] = stats_i[
+                "student_conf"
+            ].detach()
+            outputs[f"clip_student_agreement_{domain_name}"] = stats_i[
+                "agreement"
+            ].detach()
         return outputs
 
     def forward_inference(self, image, domain_name=None):
@@ -687,10 +874,16 @@ class CLIPTSSPMTDA(MultiTargetTrainerXU):
         assert tssp_cfg.STYLE_EPS > 0.0
         assert tssp_cfg.LAMBDA_EM >= 0.0
         assert tssp_cfg.ENTROPY_EPS > 0.0
+        assert tssp_cfg.LAMBDA_KL >= 0.0
+        assert tssp_cfg.KL_TEMPERATURE > 0.0
+        assert tssp_cfg.LAMBDA_PL >= 0.0
+        assert 0.0 <= tssp_cfg.PL_THRESHOLD <= 1.0
+        assert 0.0 <= tssp_cfg.PL_STUDENT_THRESHOLD <= 1.0
         if tssp_cfg.DETACH_ENTROPY_TEXT:
             assert tssp_cfg.ENABLE_VPT
             assert tssp_cfg.LAMBDA_EM > 0.0
         assert "{}" in tssp_cfg.PROMPT_TEMPLATE
+        assert "{}" in tssp_cfg.ZS_PROMPT_TEMPLATE
 
     def build_model(self):
         cfg = self.cfg
@@ -798,6 +991,7 @@ class CLIPTSSPMTDA(MultiTargetTrainerXU):
             state_dict.pop("token_prefix", None)
             state_dict.pop("token_suffix", None)
             state_dict.pop("tokenized_prompts", None)
+            state_dict.pop("zs_tokenized_prompts", None)
             model_ref = self._models[name]
             if (
                 "source_gap_proto" not in state_dict

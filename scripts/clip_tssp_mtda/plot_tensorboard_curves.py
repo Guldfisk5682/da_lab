@@ -286,6 +286,9 @@ def parse_log_summary(run_dir):
                 "GAP_GROUP_SIZE",
                 "USE_GAP_TOKEN",
                 "LAMBDA_EM",
+                "LAMBDA_KL",
+                "LAMBDA_PL",
+                "PL_THRESHOLD",
                 "ENABLE_VPT",
                 "DETACH_ENTROPY_TEXT",
             ],
@@ -488,6 +491,8 @@ def format_hparams(run_infos):
         "CLIP_TSSP_MTDA.STYLE_GROUP_SIZE",
         "CLIP_TSSP_MTDA.GAP_GROUP_SIZE",
         "CLIP_TSSP_MTDA.LAMBDA_EM",
+        "CLIP_TSSP_MTDA.LAMBDA_KL",
+        "CLIP_TSSP_MTDA.LAMBDA_PL",
         "CLIP_TSSP_MTDA.ENABLE_VPT",
     ]
     parts = [f"runs={len(run_infos)}"]

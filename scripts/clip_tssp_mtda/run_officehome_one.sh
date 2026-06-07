@@ -27,6 +27,7 @@ DATASET_CONFIG="${DATASET_CONFIG:-${REPO_ROOT}/configs/datasets/office_home_mtda
 CFG="${CFG:-${REPO_ROOT}/configs/trainers/CLIPTSSPMTDA/vit_b16.yaml}"
 BACKBONE="${BACKBONE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
+DRY_RUN="${DRY_RUN:-0}"
 
 export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 
@@ -135,6 +136,62 @@ case "${METHOD}" in
       "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "2"
       "TRAINER.CLIP_TSSP_MTDA.USE_IMAGE_TOKENS" "False"
       "TRAINER.CLIP_TSSP_MTDA.LAMBDA_EM" "0.0"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+      "OPTIM.NAME" "adamw"
+      "OPTIM.LR" "0.0001"
+      "OPTIM.WEIGHT_DECAY" "0.0001"
+    )
+    ;;
+  clip_tssp_pair_gap_kl|pair_gap_kl|kl|k0)
+    DEFAULT_TAG="clip_tssp_pair_gap_kl"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.USE_IMAGE_TOKENS" "False"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_EM" "0.0"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_KL" "0.05"
+      "TRAINER.CLIP_TSSP_MTDA.KL_TEMPERATURE" "1.0"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_PL" "0.0"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+      "OPTIM.NAME" "adamw"
+      "OPTIM.LR" "0.0001"
+      "OPTIM.WEIGHT_DECAY" "0.0001"
+    )
+    ;;
+  clip_tssp_pair_gap_pl|pair_gap_pl|pl|p0)
+    DEFAULT_TAG="clip_tssp_pair_gap_pl"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.USE_IMAGE_TOKENS" "False"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_EM" "0.0"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_KL" "0.0"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_PL" "0.2"
+      "TRAINER.CLIP_TSSP_MTDA.PL_THRESHOLD" "0.7"
+      "TRAINER.CLIP_TSSP_MTDA.PL_STUDENT_THRESHOLD" "0.7"
+      "TRAINER.CLIP_TSSP_MTDA.PL_USE_STUDENT_LOW_CONF_MASK" "True"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+      "OPTIM.NAME" "adamw"
+      "OPTIM.LR" "0.0001"
+      "OPTIM.WEIGHT_DECAY" "0.0001"
+    )
+    ;;
+  clip_tssp_pair_gap_pl_kl|pair_gap_pl_kl|pl_kl|kp0)
+    DEFAULT_TAG="clip_tssp_pair_gap_pl_kl"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.USE_IMAGE_TOKENS" "False"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_EM" "0.0"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_KL" "0.05"
+      "TRAINER.CLIP_TSSP_MTDA.KL_TEMPERATURE" "1.0"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_PL" "0.2"
+      "TRAINER.CLIP_TSSP_MTDA.PL_THRESHOLD" "0.7"
+      "TRAINER.CLIP_TSSP_MTDA.PL_STUDENT_THRESHOLD" "0.7"
+      "TRAINER.CLIP_TSSP_MTDA.PL_USE_STUDENT_LOW_CONF_MASK" "True"
       "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
       "OPTIM.NAME" "adamw"
       "OPTIM.LR" "0.0001"
@@ -340,6 +397,16 @@ echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-<unset>}"
 if [ "${DEBUG_FLAG}" = "--debug" ]; then
   echo "Debug mode: enabled"
 fi
+if [ "${DRY_RUN}" = "1" ]; then
+  echo "Dry run: enabled"
+fi
 echo "==============================================="
+
+if [ "${DRY_RUN}" = "1" ]; then
+  printf 'Command:'
+  printf ' %q' "${CMD[@]}"
+  printf '\n'
+  exit 0
+fi
 
 "${CMD[@]}"
