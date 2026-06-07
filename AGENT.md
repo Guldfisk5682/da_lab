@@ -78,6 +78,8 @@ bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_em
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img6_em
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_vctx8
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_vctx8_em_detach
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_adamw2e3
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_adamw1e4
 python scripts/clip_tssp_mtda/collect_officehome_results.py
 python scripts/clip_tssp_mtda/plot_tensorboard_curves.py --method clip_tssp_pair_gap --seed 1
 ```
@@ -224,6 +226,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-06-07: Added a fixed-weight target conditional entropy ablation. `clip_tssp_pair_gap_em` applies domainwise `L_em` to PairGap without image tokens, while `clip_tssp_pair_gap_img6_em` applies the same `lambda_em=0.01` with source/target Img6 tokens. Entropy is computed per target sample over classes and then averaged equally across target domains; `lambda_em=0` preserves and skips the old target-logit path.
 - 2026-06-07: Added the PairGap plus persistent VCTX8 vision-side experiment. A clean frozen CLIP pass supplies hidden states to PairGap, while a shared persistent appended VCTX pass produces source/target final image features. `clip_tssp_pair_gap_vctx8` uses source CE only; `clip_tssp_pair_gap_vctx8_em_detach` adds fixed `0.01 L_em` with detached target text features so entropy gradients update VCTX but not the style projector.
 - 2026-06-08: Added `scripts/clip_tssp_mtda/plot_tensorboard_curves.py` for TensorBoard diagnostics. It reads Office-Home MTDA event files, plots per-target-domain eval curves and key train curves, writes replace-in-place PNGs plus a summary CSV under `results/`, and is ready for upcoming pseudo-label/KL metrics such as coverage, agreement, and KL loss.
+- 2026-06-08: Added distinct AdamW PairGap launcher tags, `clip_tssp_pair_gap_adamw2e3` and `clip_tssp_pair_gap_adamw1e4`, so optimizer ablations do not reuse the original `clip_tssp_pair_gap` output directory or accidentally load old SGD checkpoints.
 - 2026-06-03: Merged `ss-mtda-style-prompt` into `main` as infrastructure, then opened `cocoop-vpt-mtda` for the new multi-prompt DA direction. The merge keeps Office-Home MTDA dataloading, `CoCoOpMTDA`, Office-Home download/verify scripts, result collection, and server CUDA fixes.
 - 2026-06-03: Marked `StylePromptMTDA` as a deprecated negative-result path. Experiments showed pure text-side target-style prompt modulation gives only tiny and unstable gains over `CoCoOpMTDA`, so future work should not keep tuning style queue/domain-mean prompt bias.
 - 2026-06-03: Added the first new active method, `CoCoOpVPTMTDA`: CoCoOp text prompt learning plus an independent shallow visual prompt tensor appended to CLIP ViT tokens. This is the first multi-prompt tuning DA experiment and should be compared against `CoCoOpMTDA`.

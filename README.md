@@ -271,6 +271,18 @@ bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_vctx8_em_de
 
 两条路径共用 frozen CLIP。clean visual forward 只为 PairGap 提取 hidden-state style；VCTX forward 生成用于分类的最终 image feature。C1 的 `L_em` 不更新 style projector，只沿 target final image feature 更新共享 VCTX。
 
+PairGap + AdamW 优化器对照：
+
+```bash
+# O0: PairGap + AdamW lr=2e-3
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_adamw2e3
+
+# O1: PairGap + AdamW lr=1e-4
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_adamw1e4
+```
+
+AdamW 变体使用独立输出目录，避免覆盖或加载已有 `clip_tssp_pair_gap` 的 SGD checkpoint。
+
 单个 source smoke test：
 
 ```bash

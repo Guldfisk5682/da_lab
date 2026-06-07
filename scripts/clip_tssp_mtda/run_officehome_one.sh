@@ -113,6 +113,34 @@ case "${METHOD}" in
       "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
     )
     ;;
+  clip_tssp_pair_gap_adamw2e3|pair_gap_adamw2e3|adamw2e3|o0)
+    DEFAULT_TAG="clip_tssp_pair_gap_adamw2e3"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.USE_IMAGE_TOKENS" "False"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_EM" "0.0"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+      "OPTIM.NAME" "adamw"
+      "OPTIM.LR" "0.002"
+      "OPTIM.WEIGHT_DECAY" "0.0001"
+    )
+    ;;
+  clip_tssp_pair_gap_adamw1e4|pair_gap_adamw1e4|adamw1e4|o1)
+    DEFAULT_TAG="clip_tssp_pair_gap_adamw1e4"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.USE_IMAGE_TOKENS" "False"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_EM" "0.0"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+      "OPTIM.NAME" "adamw"
+      "OPTIM.LR" "0.0001"
+      "OPTIM.WEIGHT_DECAY" "0.0001"
+    )
+    ;;
   clip_tssp_pair_gap_em|pair_gap_em)
     DEFAULT_TAG="clip_tssp_pair_gap_em"
     METHOD_OPTS=(
