@@ -41,15 +41,23 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self.gap_group_size = int(tssp_cfg.GAP_GROUP_SIZE)
         self.use_image_tokens = bool(tssp_cfg.USE_IMAGE_TOKENS)
         self.image_group_size = int(tssp_cfg.IMAGE_GROUP_SIZE)
+        self.enable_vpt = bool(tssp_cfg.ENABLE_VPT)
+        self.n_vctx = int(tssp_cfg.N_VCTX)
         self.gap_position = str(tssp_cfg.GAP_POSITION).lower()
         self.proto_momentum = float(tssp_cfg.PROTO_MOMENTUM)
         self.lambda_em = float(tssp_cfg.LAMBDA_EM)
+        self.detach_entropy_text = bool(tssp_cfg.DETACH_ENTROPY_TEXT)
         self.entropy_eps = float(tssp_cfg.ENTROPY_EPS)
         self.debug_print_once = bool(tssp_cfg.DEBUG.PRINT_ONCE)
         self._has_printed_debug = False
         self._has_warned_empty_proto = False
 
-        self.image_encoder = CLIPVisualWithHidden(clip_model.visual)
+        self.image_encoder = CLIPVisualWithHidden(
+            clip_model.visual,
+            enable_vpt=self.enable_vpt,
+            n_vctx=self.n_vctx,
+            vctx_init_std=float(tssp_cfg.VCTX_INIT_STD),
+        )
         self.text_encoder = TextEncoder(clip_model)
         self.token_embedding = clip_model.token_embedding
         self.logit_scale = clip_model.logit_scale
@@ -133,7 +141,10 @@ class CustomCLIPTSSPMTDA(nn.Module):
         print(f"  use image tokens: {self.use_image_tokens}")
         print(f"  image group size: {self.image_group_size}")
         print(f"  image token layers: {self.image_depth}")
+        print(f"  persistent VCTX: {self.enable_vpt}")
+        print(f"  VCTX tokens: {self.n_vctx if self.enable_vpt else 0}")
         print(f"  target entropy weight: {self.lambda_em}")
+        print(f"  detach entropy text: {self.detach_entropy_text}")
         print(f"  context tokens: {self.n_ctx}")
 
     @staticmethod
@@ -151,10 +162,17 @@ class CustomCLIPTSSPMTDA(nn.Module):
         if not torch.isfinite(tensor).all():
             raise FloatingPointError(f"Non-finite values detected in {name}")
 
-    @torch.no_grad()
-    def _encode_visual(self, image):
-        image_features, hidden_states = self.image_encoder(image)
+    def _encode_clean_visual(self, image):
+        with torch.no_grad():
+            image_features, hidden_states = self.image_encoder(image)
         return image_features.float(), hidden_states
+
+    def _encode_adapted_visual(self, image, clean_features=None):
+        if not self.enable_vpt:
+            if clean_features is None:
+                clean_features, _ = self._encode_clean_visual(image)
+            return clean_features
+        return self.image_encoder.forward_vpt(image).float()
 
     def _compute_style_tokens(self, hidden_states):
         style_tokens = self.style_projector(hidden_states).float()
@@ -396,7 +414,7 @@ class CustomCLIPTSSPMTDA(nn.Module):
         ctx_i = ctx_i.unsqueeze(0).expand(self.n_cls, -1, -1)
         return torch.cat([prefix, ctx_i, suffix], dim=1)
 
-    def _compute_logits(self, image_features, context):
+    def _compute_logits(self, image_features, context, detach_text_features=False):
         image_features = image_features.float()
         image_features = image_features / image_features.norm(
             dim=-1, keepdim=True
@@ -412,6 +430,8 @@ class CustomCLIPTSSPMTDA(nn.Module):
             text_features = text_features / text_features.norm(
                 dim=-1, keepdim=True
             ).clamp_min(1e-6)
+            if detach_text_features:
+                text_features = text_features.detach()
             logits_i = logit_scale * image_feature_i @ text_features.t()
             logits.append(logits_i)
 
@@ -484,7 +504,15 @@ class CustomCLIPTSSPMTDA(nn.Module):
         print("gap_position:", self.gap_position)
         print("use_image_tokens:", self.use_image_tokens)
         print("image_group_size:", self.image_group_size)
+        print("enable_vpt:", self.enable_vpt)
+        if self.enable_vpt:
+            print("vctx shape:", tuple(self.image_encoder.vctx.shape))
+            print(
+                "vctx norm:",
+                float(self.image_encoder.vctx.detach().float().norm().item()),
+            )
         print("lambda_em:", self.lambda_em)
+        print("detach_entropy_text:", self.detach_entropy_text)
         print("logits shape:", tuple(logits.shape))
         for domain_name, target_logits in target_logits_by_domain.items():
             print(
@@ -512,7 +540,10 @@ class CustomCLIPTSSPMTDA(nn.Module):
         self._has_printed_debug = True
 
     def forward_train(self, image_s, label_s, image_u_dict):
-        image_features_s, hidden_s = self._encode_visual(image_s)
+        clean_features_s, hidden_s = self._encode_clean_visual(image_s)
+        image_features_s = self._encode_adapted_visual(
+            image_s, clean_features=clean_features_s
+        )
         source_raw_tokens = self._compute_style_tokens(hidden_s)
         source_image_tokens = self._compute_image_tokens(hidden_s)
 
@@ -520,12 +551,14 @@ class CustomCLIPTSSPMTDA(nn.Module):
         target_features_by_domain = OrderedDict()
         target_image_tokens_by_domain = OrderedDict()
         for domain_name, image_u in image_u_dict.items():
-            image_features_u, hidden_u = self._encode_visual(image_u)
+            clean_features_u, hidden_u = self._encode_clean_visual(image_u)
             target_raw_tokens_by_domain[domain_name] = self._compute_style_tokens(
                 hidden_u
             )
             if self.lambda_em > 0.0:
-                target_features_by_domain[domain_name] = image_features_u
+                target_features_by_domain[domain_name] = self._encode_adapted_visual(
+                    image_u, clean_features=clean_features_u
+                )
                 target_image_tokens_by_domain[domain_name] = (
                     self._compute_image_tokens(hidden_u)
                 )
@@ -552,7 +585,9 @@ class CustomCLIPTSSPMTDA(nn.Module):
             )
             for domain_name, image_features_u in target_features_by_domain.items():
                 target_logits = self._compute_logits(
-                    image_features_u, target_contexts[domain_name]
+                    image_features_u,
+                    target_contexts[domain_name],
+                    detach_text_features=self.detach_entropy_text,
                 )
                 target_logits_by_domain[domain_name] = target_logits
                 entropy_by_domain[domain_name] = self._conditional_entropy(
@@ -590,6 +625,9 @@ class CustomCLIPTSSPMTDA(nn.Module):
         image_norm = torch.zeros((), device=loss_ce.device)
         if source_image_tokens is not None:
             image_norm = source_image_tokens.detach().float().norm()
+        vctx_norm = torch.zeros((), device=loss_ce.device)
+        if self.enable_vpt:
+            vctx_norm = self.image_encoder.vctx.detach().float().norm()
 
         outputs = {
             "loss": loss_total,
@@ -601,6 +639,7 @@ class CustomCLIPTSSPMTDA(nn.Module):
             "target_style_norm": target_norm,
             "gap_style_norm": gap_norm,
             "image_token_norm": image_norm,
+            "vctx_norm": vctx_norm,
         }
         for domain_name, entropy in entropy_by_domain.items():
             outputs[f"loss_em_{domain_name}"] = entropy.detach()
@@ -608,8 +647,19 @@ class CustomCLIPTSSPMTDA(nn.Module):
 
     def forward_inference(self, image, domain_name=None):
         del domain_name
-        image_features, hidden_states = self._encode_visual(image)
-        image_tokens = self._compute_image_tokens(hidden_states)
+        if self.use_image_tokens or not self.enable_vpt:
+            clean_features, hidden_states = self._encode_clean_visual(image)
+        else:
+            clean_features = None
+            hidden_states = None
+        image_features = self._encode_adapted_visual(
+            image, clean_features=clean_features
+        )
+        image_tokens = (
+            self._compute_image_tokens(hidden_states)
+            if hidden_states is not None
+            else None
+        )
         context = self._build_eval_context(
             batch_size=image_features.shape[0],
             device=image_features.device,
@@ -630,11 +680,16 @@ class CLIPTSSPMTDA(MultiTargetTrainerXU):
         assert tssp_cfg.STYLE_GROUP_SIZE in [1, 2, 3, 4]
         assert tssp_cfg.GAP_GROUP_SIZE in [1, 2, 3, 4]
         assert tssp_cfg.IMAGE_GROUP_SIZE in [1, 2, 3, 4]
+        assert tssp_cfg.N_VCTX > 0
+        assert tssp_cfg.VCTX_INIT_STD > 0.0
         assert tssp_cfg.GAP_POSITION in ["after_target", "middle"]
         assert 0.0 <= tssp_cfg.PROTO_MOMENTUM < 1.0
         assert tssp_cfg.STYLE_EPS > 0.0
         assert tssp_cfg.LAMBDA_EM >= 0.0
         assert tssp_cfg.ENTROPY_EPS > 0.0
+        if tssp_cfg.DETACH_ENTROPY_TEXT:
+            assert tssp_cfg.ENABLE_VPT
+            assert tssp_cfg.LAMBDA_EM > 0.0
         assert "{}" in tssp_cfg.PROMPT_TEMPLATE
 
     def build_model(self):
@@ -649,10 +704,12 @@ class CLIPTSSPMTDA(MultiTargetTrainerXU):
         print("Building CLIPTSSPMTDA")
         self.model = CustomCLIPTSSPMTDA(cfg, classnames, clip_model)
 
-        print("Freezing CLIP; updating only TSSP prompt projectors")
+        print("Freezing CLIP; updating TSSP projectors and optional VCTX")
         for name, param in self.model.named_parameters():
-            trainable = name.startswith("style_projector.") or name.startswith(
-                "image_projector."
+            trainable = (
+                name.startswith("style_projector.")
+                or name.startswith("image_projector.")
+                or (self.model.enable_vpt and name == "image_encoder.vctx")
             )
             param.requires_grad_(trainable)
 

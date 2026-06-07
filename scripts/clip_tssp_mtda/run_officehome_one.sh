@@ -124,6 +124,34 @@ case "${METHOD}" in
       "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
     )
     ;;
+  clip_tssp_pair_gap_vctx8|pair_gap_vctx8|vctx8|c0)
+    DEFAULT_TAG="clip_tssp_pair_gap_vctx8"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.USE_IMAGE_TOKENS" "False"
+      "TRAINER.CLIP_TSSP_MTDA.ENABLE_VPT" "True"
+      "TRAINER.CLIP_TSSP_MTDA.N_VCTX" "8"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_EM" "0.0"
+      "TRAINER.CLIP_TSSP_MTDA.DETACH_ENTROPY_TEXT" "False"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+    )
+    ;;
+  clip_tssp_pair_gap_vctx8_em_detach|pair_gap_vctx8_em_detach|vctx8_em|c1)
+    DEFAULT_TAG="clip_tssp_pair_gap_vctx8_em_detach"
+    METHOD_OPTS=(
+      "TRAINER.CLIP_TSSP_MTDA.USE_GAP_TOKEN" "True"
+      "TRAINER.CLIP_TSSP_MTDA.STYLE_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_GROUP_SIZE" "2"
+      "TRAINER.CLIP_TSSP_MTDA.USE_IMAGE_TOKENS" "False"
+      "TRAINER.CLIP_TSSP_MTDA.ENABLE_VPT" "True"
+      "TRAINER.CLIP_TSSP_MTDA.N_VCTX" "8"
+      "TRAINER.CLIP_TSSP_MTDA.LAMBDA_EM" "0.01"
+      "TRAINER.CLIP_TSSP_MTDA.DETACH_ENTROPY_TEXT" "True"
+      "TRAINER.CLIP_TSSP_MTDA.GAP_POSITION" "middle"
+    )
+    ;;
   clip_tssp_pair_gap_img12|pair_gap_img12|img12)
     DEFAULT_TAG="clip_tssp_pair_gap_img12"
     METHOD_OPTS=(

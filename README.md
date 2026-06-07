@@ -187,7 +187,7 @@ CLIP-first 结果汇总：
 python scripts/clip_vpt_mtda/collect_officehome_results.py
 ```
 
-下一阶段 `CLIPTSSPMTDA` 不再使用 VCTX，而是把 frozen CLIP ViT 的 12 层 hidden-state mean/std 映射成 text-side style tokens。
+基础版 `CLIPTSSPMTDA` 不使用 VCTX，而是把 frozen CLIP ViT 的 12 层 hidden-state mean/std 映射成 text-side style tokens。后续 vision-side 对照可显式启用 persistent VCTX。
 
 full: source-style tokens + target-set style tokens + target-source gap tokens：
 
@@ -258,6 +258,18 @@ bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img6_em
 ```
 
 `L_em` 对三个目标域分别计算标准样本条件熵，再对域等权平均。CLIP 主体保持冻结；该系数不是可学习参数，`LAMBDA_EM=0.0` 时完全跳过目标 logits 路径。
+
+PairGap 与 persistent VCTX8 的 vision-side tuning 对照：
+
+```bash
+# C0: source CE 同时更新 PairGap projector 与 persistent VCTX8
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_vctx8
+
+# C1: 增加固定 0.01 target entropy；target text features detach
+bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_vctx8_em_detach
+```
+
+两条路径共用 frozen CLIP。clean visual forward 只为 PairGap 提取 hidden-state style；VCTX forward 生成用于分类的最终 image feature。C1 的 `L_em` 不更新 style projector，只沿 target final image feature 更新共享 VCTX。
 
 单个 source smoke test：
 

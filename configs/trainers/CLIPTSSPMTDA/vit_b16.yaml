@@ -42,10 +42,14 @@ TRAINER:
     GAP_GROUP_SIZE: 1
     USE_IMAGE_TOKENS: false
     IMAGE_GROUP_SIZE: 1
+    ENABLE_VPT: false
+    N_VCTX: 8
+    VCTX_INIT_STD: 0.02
     GAP_POSITION: "after_target"
     PROTO_MOMENTUM: 0.9
     STYLE_EPS: 1e-6
     LAMBDA_EM: 0.0
+    DETACH_ENTROPY_TEXT: false
     ENTROPY_EPS: 1e-8
     PROMPT_TEMPLATE: "{}."
     DEBUG:
