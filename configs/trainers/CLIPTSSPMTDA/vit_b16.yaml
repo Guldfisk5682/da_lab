@@ -28,6 +28,9 @@ TRAIN:
   PRINT_FREQ: 20
   COUNT_ITER: "smaller_one"
 
+TEST:
+  EVAL_EVERY_EPOCH: false
+
 MODEL:
   BACKBONE:
     NAME: "ViT-B/16"

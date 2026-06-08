@@ -35,6 +35,10 @@ DOMAIN_TO_CODE = {
     "real_world": "R",
 }
 
+EPOCH_RE = re.compile(r"epoch \[(\d+)/(\d+)\]")
+TARGET_RE = re.compile(r"Target domain ([a-z_]+) accuracy: ([\d.+-eE]+)%")
+MACRO_RE = re.compile(r"Per-source macro average: ([\d.+-eE]+)%")
+
 IMPORTANT_TRAIN_TAGS = [
     "train/loss",
     "train/loss_ce",
@@ -43,8 +47,8 @@ IMPORTANT_TRAIN_TAGS = [
     "train/loss_pl",
     "train/weighted_loss_pl",
     "train/pl_coverage",
-    "train/pl_clip_coverage",
-    "train/pl_student_coverage",
+    "train/pl_clip_conf",
+    "train/pl_student_conf",
     "train/clip_student_agreement",
     "train/loss_em",
     "train/weighted_loss_em",
@@ -113,6 +117,12 @@ def parse_args():
         type=int,
         default=12,
         help="Maximum train scalar tags plotted per method/seed.",
+    )
+    parser.add_argument(
+        "--eval-source",
+        choices=["auto", "tensorboard", "log"],
+        default="auto",
+        help="Where to read eval accuracy curves from. Auto chooses the source with more eval epochs.",
     )
     return parser.parse_args()
 
@@ -238,11 +248,95 @@ def eval_dataframe(df):
                 "source": row.source,
                 "seed": row.seed,
                 "step": row.step,
+                "epoch": row.step + 1,
                 "target": label,
                 "value": row.value,
+                "eval_source": "tensorboard",
             }
         )
     return pd.DataFrame(records)
+
+
+def log_eval_dataframe(run_infos):
+    records = []
+    for run_info in run_infos:
+        records.extend(parse_log_eval_rows(run_info))
+    return pd.DataFrame(records)
+
+
+def parse_log_eval_rows(run_info):
+    log_path = run_info["run_dir"] / "log.txt"
+    if not log_path.is_file():
+        return []
+
+    rows = []
+    current_epoch = None
+    fallback_epoch = 1
+    for line in log_path.read_text(errors="ignore").splitlines():
+        epoch_match = EPOCH_RE.search(line)
+        if epoch_match:
+            current_epoch = int(epoch_match.group(1))
+
+        target_match = TARGET_RE.search(line)
+        if target_match:
+            domain_name = target_match.group(1)
+            epoch = current_epoch or fallback_epoch
+            rows.append(
+                {
+                    "method": run_info["method"],
+                    "task": run_info["task"],
+                    "source": run_info["source"],
+                    "seed": run_info["seed"],
+                    "step": epoch - 1,
+                    "epoch": epoch,
+                    "target": DOMAIN_TO_CODE.get(domain_name, domain_name),
+                    "value": float(target_match.group(2)),
+                    "eval_source": "log",
+                }
+            )
+            continue
+
+        macro_match = MACRO_RE.search(line)
+        if macro_match:
+            epoch = current_epoch or fallback_epoch
+            rows.append(
+                {
+                    "method": run_info["method"],
+                    "task": run_info["task"],
+                    "source": run_info["source"],
+                    "seed": run_info["seed"],
+                    "step": epoch - 1,
+                    "epoch": epoch,
+                    "target": "Macro",
+                    "value": float(macro_match.group(1)),
+                    "eval_source": "log",
+                }
+            )
+            if current_epoch is None:
+                fallback_epoch += 1
+    return rows
+
+
+def choose_eval_dataframe(eval_source, tensorboard_eval_df, log_eval_df):
+    if eval_source == "tensorboard":
+        return tensorboard_eval_df, "tensorboard"
+    if eval_source == "log":
+        return log_eval_df, "log"
+
+    tb_epoch_count = max_eval_epoch_count(tensorboard_eval_df)
+    log_epoch_count = max_eval_epoch_count(log_eval_df)
+    if log_epoch_count > tb_epoch_count:
+        return log_eval_df, "log"
+    if tensorboard_eval_df.empty and not log_eval_df.empty:
+        return log_eval_df, "log"
+    return tensorboard_eval_df, "tensorboard"
+
+
+def max_eval_epoch_count(eval_df):
+    if eval_df.empty:
+        return 0
+    counts = eval_df.groupby(["method", "task", "seed", "target"])["epoch"].nunique()
+    return int(counts.max()) if not counts.empty else 0
 
 
 def select_train_tags(df, requested_tags, max_tags):
@@ -278,7 +372,19 @@ def parse_log_summary(run_dir):
             summary[key] = match.group(1).strip()
 
     for section, keys in [
-        ("OPTIM", ["NAME", "LR", "WEIGHT_DECAY", "MAX_EPOCH", "LR_SCHEDULER"]),
+        (
+            "OPTIM",
+            [
+                "NAME",
+                "LR",
+                "WEIGHT_DECAY",
+                "MAX_EPOCH",
+                "LR_SCHEDULER",
+                "WARMUP_EPOCH",
+                "WARMUP_TYPE",
+                "WARMUP_CONS_LR",
+            ],
+        ),
         (
             "CLIP_TSSP_MTDA",
             [
@@ -361,6 +467,28 @@ def write_summary_csv(df, run_infos, output_path):
             writer.writerow({**record, **summary})
 
 
+def write_eval_csv(eval_df, output_path):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if eval_df.empty:
+        output_path.write_text("")
+        return
+    columns = [
+        "method",
+        "task",
+        "source",
+        "seed",
+        "epoch",
+        "target",
+        "value",
+        "eval_source",
+    ]
+    eval_df.sort_values(["method", "task", "seed", "target", "epoch"]).to_csv(
+        output_path,
+        index=False,
+        columns=columns,
+    )
+
+
 def setup_style():
     sns.set_theme(style="whitegrid", context="talk")
     plt.rcParams["figure.dpi"] = 140
@@ -378,12 +506,12 @@ def write_empty_figure(path, title, message):
     plt.close(fig)
 
 
-def plot_eval(eval_df, run_infos, output_path, title):
+def plot_eval(eval_df, run_infos, output_path, title, eval_source):
     if eval_df.empty:
         write_empty_figure(
             output_path,
             title,
-            "No TensorBoard eval scalars found. Expected tags like test/clipart_accuracy or test/macro_avg.",
+            "No eval scalars found. Expected TensorBoard tags like test/clipart_accuracy or log lines like 'Target domain clipart accuracy: ...%'.",
         )
         return
 
@@ -398,12 +526,18 @@ def plot_eval(eval_df, run_infos, output_path, title):
     )
     for ax, source in zip(axes.flat, sources):
         sub = eval_df[eval_df["source"] == source]
+        if len(sub["method"].unique()) > 1:
+            hue = "method"
+            style = "target"
+        else:
+            hue = "target"
+            style = "task"
         sns.lineplot(
             data=sub,
-            x="step",
+            x="epoch",
             y="value",
-            hue="target",
-            style="task",
+            hue=hue,
+            style=style,
             marker="o",
             ax=ax,
         )
@@ -415,8 +549,19 @@ def plot_eval(eval_df, run_infos, output_path, title):
     for ax in axes.flat[len(sources):]:
         ax.axis("off")
 
-    subtitle = f"Runs: {len(run_infos)}"
+    max_epoch_count = max_eval_epoch_count(eval_df)
+    subtitle = f"Runs: {len(run_infos)} | eval source: {eval_source}"
+    if max_epoch_count <= 1:
+        subtitle += " | only one eval point found"
     fig.suptitle(f"{title}\n{subtitle}", y=1.02)
+    if max_epoch_count <= 1:
+        fig.text(
+            0.5,
+            0.01,
+            "Only one eval epoch was found. Enable EVAL_EVERY_EPOCH=1 for target-accuracy oscillation diagnostics.",
+            ha="center",
+            fontsize=10,
+        )
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, bbox_inches="tight")
@@ -488,6 +633,9 @@ def format_hparams(run_infos):
         "OPTIM.LR",
         "OPTIM.WEIGHT_DECAY",
         "OPTIM.MAX_EPOCH",
+        "OPTIM.WARMUP_EPOCH",
+        "OPTIM.WARMUP_TYPE",
+        "OPTIM.WARMUP_CONS_LR",
         "CLIP_TSSP_MTDA.STYLE_GROUP_SIZE",
         "CLIP_TSSP_MTDA.GAP_GROUP_SIZE",
         "CLIP_TSSP_MTDA.LAMBDA_EM",
@@ -528,15 +676,27 @@ def main():
     eval_path = results_dir / f"{stem}_eval.png"
     train_path = results_dir / f"{stem}_train.png"
     csv_path = results_dir / f"{stem}_summary.csv"
+    eval_csv_path = results_dir / f"{stem}_eval_curve.csv"
 
     title = f"TensorBoard curves: {', '.join(path.name for path in method_dirs) or 'none'}"
-    plot_eval(eval_dataframe(df), run_infos, eval_path, title)
+    selected_eval_df, selected_eval_source = choose_eval_dataframe(
+        args.eval_source,
+        eval_dataframe(df),
+        log_eval_dataframe(run_infos),
+    )
+    plot_eval(selected_eval_df, run_infos, eval_path, title, selected_eval_source)
     plot_train(df, run_infos, train_path, title, args.train_tags, args.max_train_tags)
     write_summary_csv(df, run_infos, csv_path)
+    write_eval_csv(selected_eval_df, eval_csv_path)
 
     print(eval_path.relative_to(root) if eval_path.is_relative_to(root) else eval_path)
     print(train_path.relative_to(root) if train_path.is_relative_to(root) else train_path)
     print(csv_path.relative_to(root) if csv_path.is_relative_to(root) else csv_path)
+    print(
+        eval_csv_path.relative_to(root)
+        if eval_csv_path.is_relative_to(root)
+        else eval_csv_path
+    )
 
 
 if __name__ == "__main__":

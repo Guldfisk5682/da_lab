@@ -171,6 +171,11 @@ def extend_cfg(cfg):
     cfg.TRAINER.CLIP_TSSP_MTDA.DEBUG = CN()
     cfg.TRAINER.CLIP_TSSP_MTDA.DEBUG.PRINT_ONCE = False
 
+    # Diagnostic-only switch. When enabled, MTDA trainers evaluate target
+    # domains after every epoch to expose accuracy curves; normal experiments
+    # should keep the default final-test-only behavior.
+    cfg.TEST.EVAL_EVERY_EPOCH = False
+
     cfg.TRAINER.STYLE_PROMPT_MTDA = CN()
     cfg.TRAINER.STYLE_PROMPT_MTDA.PREC = "fp16"
     cfg.TRAINER.STYLE_PROMPT_MTDA.DEBUG = CN()

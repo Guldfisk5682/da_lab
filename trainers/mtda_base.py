@@ -154,6 +154,66 @@ class MultiTargetTrainerXU(SimpleTrainer):
         self.lab2cname = dm.lab2cname
         self.dm = dm
 
+    def after_epoch(self):
+        last_epoch = (self.epoch + 1) == self.max_epoch
+        do_test = not self.cfg.TEST.NO_TEST
+        eval_every_epoch = bool(getattr(self.cfg.TEST, "EVAL_EVERY_EPOCH", False))
+        meet_checkpoint_freq = (
+            (self.epoch + 1) % self.cfg.TRAIN.CHECKPOINT_FREQ == 0
+            if self.cfg.TRAIN.CHECKPOINT_FREQ > 0 else False
+        )
+
+        if (
+            do_test
+            and eval_every_epoch
+            and self.cfg.TEST.FINAL_MODEL != "best_val"
+        ):
+            self.test()
+            self._last_eval_epoch = self.epoch
+
+        if do_test and self.cfg.TEST.FINAL_MODEL == "best_val":
+            curr_result = self.test(split="val")
+            self._last_eval_epoch = self.epoch
+            is_best = curr_result > self.best_result
+            if is_best:
+                self.best_result = curr_result
+                self.save_model(
+                    self.epoch,
+                    self.output_dir,
+                    val_result=curr_result,
+                    model_name="model-best.pth.tar",
+                )
+
+        if meet_checkpoint_freq or last_epoch:
+            self.save_model(self.epoch, self.output_dir)
+
+    def after_train(self):
+        print("Finish training")
+
+        do_test = not self.cfg.TEST.NO_TEST
+        if do_test:
+            if self.cfg.TEST.FINAL_MODEL == "best_val":
+                print("Deploy the model with the best val performance")
+                self.load_model(self.output_dir)
+            else:
+                print("Deploy the last-epoch model")
+
+            already_evaluated_last_epoch = (
+                bool(getattr(self.cfg.TEST, "EVAL_EVERY_EPOCH", False))
+                and getattr(self, "_last_eval_epoch", None) == self.epoch
+                and self.cfg.TEST.FINAL_MODEL != "best_val"
+            )
+            if already_evaluated_last_epoch:
+                print("Skip final test because the last epoch was already evaluated")
+            else:
+                self.test()
+
+        elapsed = round(time.time() - self.time_start)
+        elapsed = str(datetime.timedelta(seconds=elapsed))
+        print(f"Elapsed: {elapsed}")
+
+        self.close_writer()
+
     def run_epoch(self):
         self.set_model_mode("train")
         losses = MetricMeter()
@@ -266,4 +326,3 @@ class MultiTargetTrainerXU(SimpleTrainer):
         if domain_name is None:
             return self.model(input_tensor)
         return self.model(input_tensor, domain_name=domain_name)
-

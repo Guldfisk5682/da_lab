@@ -282,6 +282,7 @@ bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_adamw1e4
 ```
 
 AdamW 变体使用独立输出目录，避免覆盖或加载已有 `clip_tssp_pair_gap` 的 SGD checkpoint。
+当前 optimizer 默认带 1 epoch constant warmup：`WARMUP_EPOCH=1`、`WARMUP_CONS_LR=1e-5`，之后使用 cosine scheduler。
 
 PairGap + frozen CLIP 约束对照：
 
@@ -308,6 +309,13 @@ bash scripts/clip_tssp_mtda/run_pairgap_5variants.sh
 SEED=2 bash scripts/clip_tssp_mtda/run_pairgap_5variants.sh
 ```
 
+如需诊断 target accuracy 是否随 epoch 震荡，可以开启逐 epoch eval。该开关只用于曲线诊断，正常汇报结果建议保持默认 final-test-only：
+
+```bash
+EVAL_EVERY_EPOCH=1 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_adamw1e4
+EVAL_EVERY_EPOCH=1 bash scripts/clip_tssp_mtda/run_pairgap_5variants.sh
+```
+
 单个 source smoke test：
 
 ```bash
@@ -331,6 +339,12 @@ python scripts/clip_tssp_mtda/plot_tensorboard_curves.py --method clip_tssp_pair
 python scripts/clip_tssp_mtda/plot_tensorboard_curves.py \
   --methods clip_tssp_pair_gap clip_tssp_pair_gap_vctx8 clip_tssp_pair_gap_em \
   --seed 1
+
+# 强制从 log.txt 解析 eval 曲线；默认 auto 会选择点更多的数据源
+python scripts/clip_tssp_mtda/plot_tensorboard_curves.py \
+  --method clip_tssp_pair_gap_adamw1e4 \
+  --seed 1 \
+  --eval-source log
 ```
 
 绘图脚本会覆盖同名旧图片，并同时写出对应的 `_summary.csv`。评测图展示每个 source task 下各 target domain 的 accuracy/macro 曲线；训练图展示 loss、lr、source acc、style/gap norm、pseudo-label/KL/coverage 等重要标量。

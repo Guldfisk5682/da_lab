@@ -33,6 +33,7 @@ echo "PairGap five-variant overnight run"
 echo "Seed: ${SEED}"
 echo "Methods: ${METHODS[*]}"
 echo "Debug: ${DEBUG_FLAG:-off}"
+echo "Eval every epoch: ${EVAL_EVERY_EPOCH:-0}"
 echo "==============================================="
 
 for method in "${METHODS[@]}"; do

@@ -84,8 +84,10 @@ bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_kl
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_pl
 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_pl_kl
 bash scripts/clip_tssp_mtda/run_pairgap_5variants.sh
+EVAL_EVERY_EPOCH=1 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_adamw1e4
 python scripts/clip_tssp_mtda/collect_officehome_results.py
 python scripts/clip_tssp_mtda/plot_tensorboard_curves.py --method clip_tssp_pair_gap --seed 1
+python scripts/clip_tssp_mtda/plot_tensorboard_curves.py --method clip_tssp_pair_gap_adamw1e4 --seed 1 --eval-source log
 ```
 
 `CLIPTSSPMTDA` structure:
@@ -232,6 +234,7 @@ Main module: shallow hidden-state normalize-restore + learnable gate
 - 2026-06-08: Added `scripts/clip_tssp_mtda/plot_tensorboard_curves.py` for TensorBoard diagnostics. It reads Office-Home MTDA event files, plots per-target-domain eval curves and key train curves, writes replace-in-place PNGs plus a summary CSV under `results/`, and is ready for upcoming pseudo-label/KL metrics such as coverage, agreement, and KL loss.
 - 2026-06-08: Added distinct AdamW PairGap launcher tags, `clip_tssp_pair_gap_adamw2e3` and `clip_tssp_pair_gap_adamw1e4`, so optimizer ablations do not reuse the original `clip_tssp_pair_gap` output directory or accidentally load old SGD checkpoints.
 - 2026-06-08: Added frozen-CLIP target-side constraints for PairGap. `clip_tssp_pair_gap_kl` uses KL(student target logits || frozen CLIP reference logits), `clip_tssp_pair_gap_pl` uses conservative high-confidence frozen-CLIP pseudo labels only when the student is still low-confidence, and `clip_tssp_pair_gap_pl_kl` combines both. `scripts/clip_tssp_mtda/run_pairgap_5variants.sh` runs O0/O1/K0/P0/KP0 in one overnight command and then collects results plus TensorBoard curves.
+- 2026-06-08: Added diagnostic per-epoch target evaluation via `TEST.EVAL_EVERY_EPOCH` and the launcher env `EVAL_EVERY_EPOCH=1`. This is for curve inspection only; default runs still evaluate once after training. The TensorBoard plotting script can now auto-select between TensorBoard eval scalars and `log.txt` eval lines, writes an `_eval_curve.csv`, and warns when only one eval epoch exists.
 - 2026-06-03: Merged `ss-mtda-style-prompt` into `main` as infrastructure, then opened `cocoop-vpt-mtda` for the new multi-prompt DA direction. The merge keeps Office-Home MTDA dataloading, `CoCoOpMTDA`, Office-Home download/verify scripts, result collection, and server CUDA fixes.
 - 2026-06-03: Marked `StylePromptMTDA` as a deprecated negative-result path. Experiments showed pure text-side target-style prompt modulation gives only tiny and unstable gains over `CoCoOpMTDA`, so future work should not keep tuning style queue/domain-mean prompt bias.
 - 2026-06-03: Added the first new active method, `CoCoOpVPTMTDA`: CoCoOp text prompt learning plus an independent shallow visual prompt tensor appended to CLIP ViT tokens. This is the first multi-prompt tuning DA experiment and should be compared against `CoCoOpMTDA`.
