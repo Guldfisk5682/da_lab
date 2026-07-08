@@ -28,7 +28,7 @@ CFG="${CFG:-${REPO_ROOT}/configs/trainers/CLIPTSSPMTDA/vit_b16.yaml}"
 BACKBONE="${BACKBONE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
 DRY_RUN="${DRY_RUN:-0}"
-EVAL_EVERY_EPOCH="${EVAL_EVERY_EPOCH:-0}"
+EVAL_EVERY_EPOCH="${EVAL_EVERY_EPOCH:-False}"
 
 export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 
@@ -379,7 +379,7 @@ if [ "${DEBUG_FLAG}" = "--debug" ]; then
   )
 fi
 
-if [ "${EVAL_EVERY_EPOCH}" = "1" ]; then
+if [ "${EVAL_EVERY_EPOCH}" = "1" ] || [ "${EVAL_EVERY_EPOCH}" = "True" ]; then
   CMD+=("TEST.EVAL_EVERY_EPOCH" "True")
 fi
 
@@ -402,7 +402,7 @@ echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-<unset>}"
 if [ "${DEBUG_FLAG}" = "--debug" ]; then
   echo "Debug mode: enabled"
 fi
-if [ "${EVAL_EVERY_EPOCH}" = "1" ]; then
+if [ "${EVAL_EVERY_EPOCH}" = "1" ] || [ "${EVAL_EVERY_EPOCH}" = "True" ]; then
   echo "Eval every epoch: enabled"
 fi
 if [ "${DRY_RUN}" = "1" ]; then
