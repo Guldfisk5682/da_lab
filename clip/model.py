@@ -188,12 +188,97 @@ class ResidualAttentionBlock(nn.Module):
         return x
 
 
+class ResidualAttentionBlockMaPLe(nn.Module):
+    """Transformer block that can replace deep prompt tokens layer-by-layer.
+
+    MaPLe keeps the first prompt insertion outside the block, then replaces the
+    previous layer's prompt tokens with the next compound prompt before each
+    deeper block. The input/output is a small list so nn.Sequential can carry
+    the prompt list and current depth counter.
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        n_head: int,
+        attn_mask: torch.Tensor = None,
+        design_details=None,
+        text_layer=False,
+        i=0,
+    ):
+        super().__init__()
+
+        self.attn = nn.MultiheadAttention(d_model, n_head)
+        self.ln_1 = LayerNorm(d_model)
+        self.mlp = nn.Sequential(OrderedDict([
+            ("c_fc", nn.Linear(d_model, d_model * 4)),
+            ("gelu", QuickGELU()),
+            ("c_proj", nn.Linear(d_model * 4, d_model))
+        ]))
+        self.ln_2 = LayerNorm(d_model)
+        self.text_layer = text_layer
+        self.attn_mask = attn_mask
+        self.compound_prompt_nctx = design_details["maple_length"]
+        self.first_layer = i == 0
+
+    def attention(self, x: torch.Tensor):
+        self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
+        return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
+
+    def forward(self, inputs):
+        x, compound_prompts_deeper, counter = inputs
+
+        if not self.first_layer and len(compound_prompts_deeper) > 0:
+            if counter <= len(compound_prompts_deeper) - 1:
+                prompt = compound_prompts_deeper[counter]
+                prompt = prompt.expand(x.shape[1], -1, -1).permute(1, 0, 2)
+                prompt = prompt.to(dtype=x.dtype, device=x.device)
+
+                if self.text_layer:
+                    prefix = x[:1, :, :]
+                    suffix = x[1 + self.compound_prompt_nctx:, :, :]
+                    x = torch.cat([prefix, prompt, suffix], dim=0)
+                else:
+                    prefix = x[: x.shape[0] - self.compound_prompt_nctx, :, :]
+                    x = torch.cat([prefix, prompt], dim=0)
+
+                counter += 1
+
+        x = x + self.attention(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return [x, compound_prompts_deeper, counter]
+
+
 class Transformer(nn.Module):
-    def __init__(self, width: int, layers: int, heads: int, attn_mask: torch.Tensor = None):
+    def __init__(
+        self,
+        width: int,
+        layers: int,
+        heads: int,
+        attn_mask: torch.Tensor = None,
+        design_details=None,
+        text_layer=False,
+    ):
         super().__init__()
         self.width = width
         self.layers = layers
-        self.resblocks = nn.Sequential(*[ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
+        current_trainer = (design_details or {}).get("trainer", "default")
+        if current_trainer == "MaPLe":
+            self.resblocks = nn.Sequential(
+                *[
+                    ResidualAttentionBlockMaPLe(
+                        width,
+                        heads,
+                        attn_mask,
+                        design_details=design_details,
+                        text_layer=text_layer,
+                        i=i,
+                    )
+                    for i in range(layers)
+                ]
+            )
+        else:
+            self.resblocks = nn.Sequential(*[ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
 
     def forward(self, x: torch.Tensor):
         return self.resblocks(x)
@@ -236,6 +321,62 @@ class VisionTransformer(nn.Module):
         return x
 
 
+class VisionTransformerMaPLe(nn.Module):
+    def __init__(
+        self,
+        input_resolution: int,
+        patch_size: int,
+        width: int,
+        layers: int,
+        heads: int,
+        output_dim: int,
+        design_details,
+    ):
+        super().__init__()
+        self.input_resolution = input_resolution
+        self.output_dim = output_dim
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
+
+        scale = width ** -0.5
+        self.class_embedding = nn.Parameter(scale * torch.randn(width))
+        self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
+        self.ln_pre = LayerNorm(width)
+        self.transformer = Transformer(width, layers, heads, design_details=design_details)
+
+        self.ln_post = LayerNorm(width)
+        self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
+
+    def forward(self, x: torch.Tensor, shared_ctx, compound_deeper_prompts):
+        x = self.conv1(x)
+        x = x.reshape(x.shape[0], x.shape[1], -1)
+        x = x.permute(0, 2, 1)
+        x = torch.cat(
+            [
+                self.class_embedding.to(x.dtype)
+                + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device),
+                x,
+            ],
+            dim=1,
+        )
+        x = x + self.positional_embedding.to(x.dtype)
+
+        visual_ctx = shared_ctx.expand(x.shape[0], -1, -1).to(dtype=x.dtype, device=x.device)
+        x = torch.cat([x, visual_ctx], dim=1)
+
+        x = self.ln_pre(x)
+        x = x.permute(1, 0, 2)
+        outputs = self.transformer([x, compound_deeper_prompts, 0])
+        x = outputs[0]
+        x = x.permute(1, 0, 2)
+
+        x = self.ln_post(x[:, 0, :])
+
+        if self.proj is not None:
+            x = x @ self.proj
+
+        return x
+
+
 class CLIP(nn.Module):
     def __init__(self,
                  embed_dim: int,
@@ -249,11 +390,13 @@ class CLIP(nn.Module):
                  vocab_size: int,
                  transformer_width: int,
                  transformer_heads: int,
-                 transformer_layers: int
+                 transformer_layers: int,
+                 design_details=None,
                  ):
         super().__init__()
 
         self.context_length = context_length
+        design_details = design_details or {"trainer": "default"}
 
         if isinstance(vision_layers, (tuple, list)):
             vision_heads = vision_width * 32 // 64
@@ -266,20 +409,33 @@ class CLIP(nn.Module):
             )
         else:
             vision_heads = vision_width // 64
-            self.visual = VisionTransformer(
-                input_resolution=image_resolution,
-                patch_size=vision_patch_size,
-                width=vision_width,
-                layers=vision_layers,
-                heads=vision_heads,
-                output_dim=embed_dim
-            )
+            if design_details.get("trainer") == "MaPLe":
+                self.visual = VisionTransformerMaPLe(
+                    input_resolution=image_resolution,
+                    patch_size=vision_patch_size,
+                    width=vision_width,
+                    layers=vision_layers,
+                    heads=vision_heads,
+                    output_dim=embed_dim,
+                    design_details=design_details,
+                )
+            else:
+                self.visual = VisionTransformer(
+                    input_resolution=image_resolution,
+                    patch_size=vision_patch_size,
+                    width=vision_width,
+                    layers=vision_layers,
+                    heads=vision_heads,
+                    output_dim=embed_dim
+                )
 
         self.transformer = Transformer(
             width=transformer_width,
             layers=transformer_layers,
             heads=transformer_heads,
-            attn_mask=self.build_attention_mask()
+            attn_mask=self.build_attention_mask(),
+            design_details=design_details,
+            text_layer=True,
         )
 
         self.vocab_size = vocab_size
@@ -392,7 +548,7 @@ def convert_weights(model: nn.Module):
     model.apply(_convert_weights_to_fp16)
 
 
-def build_model(state_dict: dict):
+def build_model(state_dict: dict, design_details=None):
     vit = "visual.proj" in state_dict
 
     if vit:
@@ -420,7 +576,8 @@ def build_model(state_dict: dict):
     model = CLIP(
         embed_dim,
         image_resolution, vision_layers, vision_width, vision_patch_size,
-        context_length, vocab_size, transformer_width, transformer_heads, transformer_layers
+        context_length, vocab_size, transformer_width, transformer_heads, transformer_layers,
+        design_details=design_details,
     )
 
     for key in ["input_resolution", "context_length", "vocab_size"]:

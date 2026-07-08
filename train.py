@@ -32,6 +32,7 @@ import trainers.cocoop_mtda
 import trainers.cocoop_vpt_mtda
 import trainers.clip_tssp_mtda
 import trainers.clip_vpt_mtda
+import trainers.maple_mtda
 import trainers.style_prompt_mtda
 import trainers.zsclip
 
@@ -170,6 +171,15 @@ def extend_cfg(cfg):
     cfg.TRAINER.CLIP_TSSP_MTDA.ZS_PROMPT_TEMPLATE = "a photo of a {}."
     cfg.TRAINER.CLIP_TSSP_MTDA.DEBUG = CN()
     cfg.TRAINER.CLIP_TSSP_MTDA.DEBUG.PRINT_ONCE = False
+
+    cfg.TRAINER.MAPLE_MTDA = CN()
+    cfg.TRAINER.MAPLE_MTDA.N_CTX = 2
+    cfg.TRAINER.MAPLE_MTDA.CTX_INIT = "a photo of a"
+    cfg.TRAINER.MAPLE_MTDA.PREC = "fp16"
+    cfg.TRAINER.MAPLE_MTDA.PROMPT_DEPTH = 9
+    cfg.TRAINER.MAPLE_MTDA.USE_MAPLE_CLIP_BUILD = True
+    cfg.TRAINER.MAPLE_MTDA.DEBUG = CN()
+    cfg.TRAINER.MAPLE_MTDA.DEBUG.PRINT_ONCE = False
 
     # Diagnostic-only switch. When enabled, MTDA trainers evaluate target
     # domains after every epoch to expose accuracy curves; normal experiments
