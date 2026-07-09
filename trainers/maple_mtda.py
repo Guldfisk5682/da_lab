@@ -159,14 +159,49 @@ class MultiModalPromptLearner(nn.Module):
 class CustomMaPLeMTDA(nn.Module):
     def __init__(self, cfg, classnames, clip_model):
         super().__init__()
+        maple_cfg = cfg.TRAINER.MAPLE_MTDA
         self.prompt_learner = MultiModalPromptLearner(cfg, classnames, clip_model)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoderMaPLe(clip_model)
+        self.token_embedding = clip_model.token_embedding
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
+        self.lambda_pl = float(maple_cfg.LAMBDA_PL)
+        self.pl_threshold = float(maple_cfg.PL_THRESHOLD)
+        self.pl_student_threshold = float(maple_cfg.PL_STUDENT_THRESHOLD)
+        self.pl_use_student_low_conf_mask = bool(
+            maple_cfg.PL_USE_STUDENT_LOW_CONF_MASK
+        )
+        self.debug_print_once = bool(maple_cfg.DEBUG.PRINT_ONCE)
+        self._debug_printed = False
+
+        zs_template = str(maple_cfg.ZS_PROMPT_TEMPLATE)
+        if "{}" not in zs_template:
+            raise ValueError("TRAINER.MAPLE_MTDA.ZS_PROMPT_TEMPLATE must contain '{}'")
+        classnames = [name.replace("_", " ") for name in classnames]
+        zs_prompts = [zs_template.format(name) for name in classnames]
+        self.register_buffer(
+            "zs_tokenized_prompts",
+            torch.cat([clip.tokenize(prompt) for prompt in zs_prompts]),
+        )
+
+        print(f"MaPLeMTDA pseudo-label weight: {self.lambda_pl}")
+        print(f"MaPLeMTDA pseudo-label threshold: {self.pl_threshold}")
+        print(f"MaPLeMTDA pseudo-label student threshold: {self.pl_student_threshold}")
+        print(
+            "MaPLeMTDA pseudo-label low-conf only: "
+            f"{self.pl_use_student_low_conf_mask}"
+        )
+        print(f"MaPLeMTDA zero-shot prompt template: {zs_template}")
+
+    @staticmethod
+    def _ensure_finite(name, tensor):
+        if not torch.isfinite(tensor).all():
+            raise FloatingPointError(f"Non-finite values detected in {name}")
 
     def forward(self, image, domain_name=None):
+        del domain_name
         tokenized_prompts = self.tokenized_prompts
         logit_scale = self.logit_scale.exp()
 
@@ -189,13 +224,159 @@ class CustomMaPLeMTDA(nn.Module):
         logits = logit_scale * image_features @ text_features.t()
         return logits
 
+    @torch.no_grad()
+    def _encode_reference_image(self, image):
+        visual = self.image_encoder
+        x = visual.conv1(image.type(self.dtype))
+        x = x.reshape(x.shape[0], x.shape[1], -1)
+        x = x.permute(0, 2, 1)
+        cls = visual.class_embedding.to(x.dtype)
+        cls = cls + torch.zeros(
+            x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device
+        )
+        x = torch.cat([cls, x], dim=1)
+        x = x + visual.positional_embedding.to(x.dtype)
+        x = visual.ln_pre(x)
+        x = x.permute(1, 0, 2)
+        x = visual.transformer([x, [], 0])[0]
+        x = x.permute(1, 0, 2)
+        x = visual.ln_post(x[:, 0, :])
+        if visual.proj is not None:
+            x = x @ visual.proj
+        x = x.float()
+        x = x / x.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        self._ensure_finite("maple_reference_image_features", x)
+        return x
+
+    @torch.no_grad()
+    def _zero_shot_text_features(self, device):
+        tokenized_prompts = self.zs_tokenized_prompts.to(device)
+        prompts = self.token_embedding(tokenized_prompts).type(self.dtype)
+        text_features = self.text_encoder(prompts, tokenized_prompts, []).float()
+        text_features = text_features / text_features.norm(
+            dim=-1, keepdim=True
+        ).clamp_min(1e-6)
+        self._ensure_finite("maple_zero_shot_text_features", text_features)
+        return text_features
+
+    @torch.no_grad()
+    def _compute_reference_logits(self, image):
+        image_features = self._encode_reference_image(image)
+        text_features = self._zero_shot_text_features(image_features.device)
+        logits = self.logit_scale.float().exp() * image_features @ text_features.t()
+        self._ensure_finite("maple_reference_logits", logits)
+        return logits.detach()
+
+    def _pseudo_label_loss(self, student_logits, reference_logits):
+        reference_probs = F.softmax(reference_logits.float(), dim=-1)
+        reference_conf, reference_label = reference_probs.max(dim=-1)
+        student_probs = F.softmax(student_logits.detach().float(), dim=-1)
+        student_conf, student_label = student_probs.max(dim=-1)
+
+        mask = reference_conf.ge(self.pl_threshold)
+        if self.pl_use_student_low_conf_mask:
+            mask = mask & student_conf.lt(self.pl_student_threshold)
+
+        mask_float = mask.float()
+        ce = F.cross_entropy(student_logits, reference_label, reduction="none")
+        loss = (ce * mask_float).sum() / mask_float.sum().clamp_min(1.0)
+        self._ensure_finite("maple_pseudo_label_loss", loss)
+
+        stats = {
+            "coverage": mask_float.mean(),
+            "clip_conf": reference_conf.mean(),
+            "student_conf": student_conf.mean(),
+            "agreement": (student_label == reference_label).float().mean(),
+        }
+        return loss, stats
+
+    def forward_train(self, image_s, label_s, image_u_dict):
+        logits_s = self(image_s)
+        loss_ce = F.cross_entropy(logits_s, label_s)
+        self._ensure_finite("maple_source_ce", loss_ce)
+
+        pl_by_domain = {}
+        pl_stats_by_domain = {}
+        if self.lambda_pl > 0.0:
+            for domain_name, image_u in image_u_dict.items():
+                target_logits = self(image_u)
+                reference_logits = self._compute_reference_logits(image_u)
+                pl_loss, pl_stats = self._pseudo_label_loss(
+                    target_logits, reference_logits
+                )
+                pl_by_domain[domain_name] = pl_loss
+                pl_stats_by_domain[domain_name] = pl_stats
+            loss_pl = torch.stack(list(pl_by_domain.values())).mean()
+            pl_coverage = torch.stack(
+                [stats["coverage"] for stats in pl_stats_by_domain.values()]
+            ).mean()
+            pl_clip_conf = torch.stack(
+                [stats["clip_conf"] for stats in pl_stats_by_domain.values()]
+            ).mean()
+            pl_student_conf = torch.stack(
+                [stats["student_conf"] for stats in pl_stats_by_domain.values()]
+            ).mean()
+            clip_student_agreement = torch.stack(
+                [stats["agreement"] for stats in pl_stats_by_domain.values()]
+            ).mean()
+        else:
+            loss_pl = loss_ce.new_zeros(())
+            pl_coverage = loss_ce.new_zeros(())
+            pl_clip_conf = loss_ce.new_zeros(())
+            pl_student_conf = loss_ce.new_zeros(())
+            clip_student_agreement = loss_ce.new_zeros(())
+
+        loss_total = loss_ce + self.lambda_pl * loss_pl
+        self._ensure_finite("maple_loss_total", loss_total)
+
+        if self.debug_print_once and not self._debug_printed:
+            print("[MaPLeMTDA PL debug]")
+            print("source batch shape:", tuple(image_s.shape))
+            for domain_name, image_u in image_u_dict.items():
+                print(f"target batch shape [{domain_name}]:", tuple(image_u.shape))
+            print("source logits shape:", tuple(logits_s.shape))
+            print("lambda_pl:", self.lambda_pl)
+            print("loss_ce:", float(loss_ce.detach().item()))
+            print("loss_pl:", float(loss_pl.detach().item()))
+            print("pl_coverage:", float(pl_coverage.detach().item()))
+            print("loss_total:", float(loss_total.detach().item()))
+            self._debug_printed = True
+
+        outputs = {
+            "loss": loss_total,
+            "source_ce": loss_ce.detach(),
+            "loss_pl": loss_pl.detach(),
+            "weighted_loss_pl": (self.lambda_pl * loss_pl).detach(),
+            "pl_coverage": pl_coverage.detach(),
+            "pl_clip_conf": pl_clip_conf.detach(),
+            "pl_student_conf": pl_student_conf.detach(),
+            "clip_student_agreement": clip_student_agreement.detach(),
+        }
+        for domain_name, pl_loss in pl_by_domain.items():
+            outputs[f"loss_pl_{domain_name}"] = pl_loss.detach()
+        for domain_name, stats in pl_stats_by_domain.items():
+            outputs[f"pl_coverage_{domain_name}"] = stats["coverage"].detach()
+            outputs[f"pl_clip_conf_{domain_name}"] = stats["clip_conf"].detach()
+            outputs[f"pl_student_conf_{domain_name}"] = stats[
+                "student_conf"
+            ].detach()
+            outputs[f"clip_student_agreement_{domain_name}"] = stats[
+                "agreement"
+            ].detach()
+        return outputs
+
 
 @TRAINER_REGISTRY.register()
 class MaPLeMTDA(MultiTargetTrainerXU):
     """MaPLe source-only baseline under the Office-Home SS-MTDA protocol."""
 
     def check_cfg(self, cfg):
-        assert cfg.TRAINER.MAPLE_MTDA.PREC in ["fp16", "fp32", "amp"]
+        maple_cfg = cfg.TRAINER.MAPLE_MTDA
+        assert maple_cfg.PREC in ["fp16", "fp32", "amp"]
+        assert maple_cfg.LAMBDA_PL >= 0.0
+        assert 0.0 <= maple_cfg.PL_THRESHOLD <= 1.0
+        assert 0.0 <= maple_cfg.PL_STUDENT_THRESHOLD <= 1.0
+        assert "{}" in maple_cfg.ZS_PROMPT_TEMPLATE
 
     def build_model(self):
         cfg = self.cfg
@@ -253,23 +434,24 @@ class MaPLeMTDA(MultiTargetTrainerXU):
         prec = self.cfg.TRAINER.MAPLE_MTDA.PREC
         if prec == "amp":
             with autocast():
-                logits = self.model(image_x)
-                loss = F.cross_entropy(logits, label_x)
+                outputs = self.model.forward_train(image_x, label_x, image_u)
+                loss = outputs["loss"]
             self.optim.zero_grad()
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optim)
             self.scaler.update()
         else:
-            logits = self.model(image_x)
-            loss = F.cross_entropy(logits, label_x)
+            outputs = self.model.forward_train(image_x, label_x, image_u)
+            loss = outputs["loss"]
             self.optim.zero_grad()
             loss.backward()
             self.optim.step()
 
-        loss_summary = {
-            "loss": loss.item(),
-            "source_ce": loss.item(),
-        }
+        loss_summary = {"loss": float(loss.item())}
+        for key, value in outputs.items():
+            if key == "loss":
+                continue
+            loss_summary[key] = value.item() if torch.is_tensor(value) else float(value)
 
         if (self.batch_idx + 1) == self.num_batches:
             self.update_lr()

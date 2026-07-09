@@ -25,6 +25,7 @@ DATA="${DATA:-${REPO_ROOT}/data}"
 DATASET_CONFIG="${DATASET_CONFIG:-${REPO_ROOT}/configs/datasets/office_home_mtda.yaml}"
 CFG="${CFG:-${REPO_ROOT}/configs/trainers/MaPLeMTDA/vit_b16.yaml}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
+METHOD_TAG="${METHOD_TAG:-maple_mtda}"
 DRY_RUN="${DRY_RUN:-0}"
 EVAL_EVERY_EPOCH="${EVAL_EVERY_EPOCH:-False}"
 
@@ -65,7 +66,7 @@ case "${SOURCE_CODE}" in
 esac
 
 TARGET_TAG="$(IFS=''; echo "${TARGET_CODES[*]}")"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/output/officehome_mtda/maple_mtda/${SOURCE_CODE}2${TARGET_TAG}/seed${SEED}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/output/officehome_mtda/${METHOD_TAG}/${SOURCE_CODE}2${TARGET_TAG}/seed${SEED}}"
 
 OPTS=(
   "--root" "${DATA}"
@@ -100,6 +101,7 @@ echo "MaPLeMTDA Office-Home SS-MTDA"
 echo "  repo: ${REPO_ROOT}"
 echo "  source: ${SOURCE_CODE} (${SOURCE_DOMAIN})"
 echo "  targets: ${TARGET_CODES[*]} (${TARGET_DOMAINS[*]})"
+echo "  method tag: ${METHOD_TAG}"
 echo "  seed: ${SEED}"
 echo "  output: ${OUTPUT_DIR}"
 echo "  cfg: ${CFG}"

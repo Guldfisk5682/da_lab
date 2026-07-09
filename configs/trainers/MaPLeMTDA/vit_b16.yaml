@@ -43,5 +43,10 @@ TRAINER:
     PREC: "fp16"
     PROMPT_DEPTH: 9
     USE_MAPLE_CLIP_BUILD: true
+    LAMBDA_PL: 0.0
+    PL_THRESHOLD: 0.7
+    PL_STUDENT_THRESHOLD: 0.7
+    PL_USE_STUDENT_LOW_CONF_MASK: true
+    ZS_PROMPT_TEMPLATE: "a photo of a {}."
     DEBUG:
       PRINT_ONCE: false
