@@ -1,5 +1,269 @@
 # AGENT.md
 
+## Current Handoff Quick Notes
+
+Last updated: 2026-07-10.
+
+This project is currently in the `clip-vpt-mtda` branch. The active research
+focus has shifted again after the latest Office-Home SS-MTDA results:
+
+```text
+Current strongest observation:
+  Pseudo-label regularization from frozen zero-shot CLIP is a strong target-side
+  adaptation signal for source-available closed-set SS-MTDA.
+
+Current best seed1 result:
+  MaPLeMTDA + PL(lambda=0.3): about 84.45 overall 12-task average.
+
+Important implication:
+  The earlier CLIPTSSPMTDA PairGap structure is useful but not yet stronger than
+  a MaPLe-style multi-modal prompt backbone with the same PL objective.
+  Future model work should consider a MaPLe-like backbone plus MTDA/domain-aware
+  components, rather than continuing to over-tune the current pure TSSP path.
+```
+
+Key seed1 numbers to remember:
+
+```text
+CoCoOpMTDA baseline:             about 83.40
+MaPLeMTDA:                       about 83.67
+CLIPTSSPMTDA PairGap + SGD PL03: about 84.07
+MaPLeMTDA + PL03:                about 84.45
+```
+
+KL status:
+
+```text
+KL to frozen CLIP logits is not part of the current main method.
+In the SGD sweep it behaved like a weak/unstable regularizer and did not beat
+single PL. Keep KL only as an ablation unless the user explicitly reopens it.
+```
+
+### Data And Result Backups
+
+Local workspace:
+
+```text
+/home/txc_king/dldic/da_lab
+```
+
+Remote server workspace:
+
+```text
+~/workspace/da_lab
+```
+
+Remote Office-Home data is already prepared at:
+
+```text
+~/workspace/da_lab/data/office_home
+```
+
+Do not download datasets or model weights locally. Local work should be code,
+scripts, docs, and lightweight dry-runs only. Real dataset access and real
+training happen on the remote server.
+
+Latest important result backups are stored locally in:
+
+```text
+/home/txc_king/dldic/da_lab/results/officehome_clip_tssp_seed1_2026-07-10.md
+/home/txc_king/dldic/da_lab/results/officehome_clip_tssp_seed1_2026-07-10.csv
+/home/txc_king/dldic/da_lab/results/officehome_clip_tssp_seed1_summary_2026-07-10.csv
+/home/txc_king/dldic/da_lab/results/officehome_maple_mtda_seed1_2026-07-10.md
+/home/txc_king/dldic/da_lab/results/officehome_maple_mtda_seed1_2026-07-10.csv
+```
+
+Remote latest generated result files are:
+
+```text
+~/workspace/da_lab/results/officehome_clip_tssp_seed1.md
+~/workspace/da_lab/results/officehome_clip_tssp_seed1.csv
+~/workspace/da_lab/results/officehome_clip_tssp_seed1_summary.csv
+~/workspace/da_lab/results/officehome_maple_mtda_seed1.md
+~/workspace/da_lab/results/officehome_maple_mtda_seed1.csv
+```
+
+Historical local backups also exist in `results/`, including:
+
+```text
+officehome_key_results_recovered_2026-07-08.*
+officehome_maple_mtda_seed1_2026-07-08.*
+```
+
+### Remote Access
+
+Use the configured SSH alias:
+
+```bash
+ssh lab-server
+```
+
+Remote environment:
+
+```bash
+cd ~/workspace/da_lab
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate coop-da
+```
+
+Remote GPU notes:
+
+```text
+The server has two RTX 4090 GPUs.
+Prefer explicitly setting CUDA_VISIBLE_DEVICES before training.
+Recent stable long runs used CUDA_VISIBLE_DEVICES=1.
+Use PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for long training jobs.
+```
+
+Check GPU and background jobs:
+
+```bash
+nvidia-smi
+~/miniconda3/bin/screen -list
+```
+
+`screen` is installed under Miniconda. If `screen` is not found in a shell,
+use the full path:
+
+```bash
+~/miniconda3/bin/screen
+```
+
+There may be an old detached screen with a name like `pts-8...`; do not assume
+it is the active run. New runs should use explicit names such as `maple_pl`,
+`run_recover`, or another descriptive tag.
+
+### Git And Code Workflow
+
+Default workflow:
+
+```text
+1. Edit code locally in /home/txc_king/dldic/da_lab.
+2. Commit locally.
+3. Push to temp/Gitee.
+4. SSH to the server.
+5. Pull on the remote.
+6. Run training in screen.
+```
+
+Local push:
+
+```bash
+git status --short
+git add <files>
+git commit -m "<message>"
+git push temp clip-vpt-mtda
+```
+
+Remote pull:
+
+```bash
+ssh lab-server
+cd ~/workspace/da_lab
+git pull --ff-only origin clip-vpt-mtda
+```
+
+Important:
+
+```text
+Remote origin currently points to the Gitee/temp mirror.
+Do not rely on GitHub origin from the server unless the user confirms network
+and authentication are fixed.
+```
+
+Local `.tmp/` is untracked and contains temporary reference materials/clones.
+Do not commit `.tmp/`.
+
+### Active Training Entrypoints
+
+MaPLe baseline:
+
+```bash
+bash scripts/maple_mtda/run_officehome_all.sh
+python scripts/maple_mtda/collect_officehome_results.py
+```
+
+MaPLe + PL(lambda=0.3), current strongest control:
+
+```bash
+METHOD_TAG=maple_mtda_pl03 \
+EXTRA_OPTS="TRAINER.MAPLE_MTDA.LAMBDA_PL 0.3 TRAINER.MAPLE_MTDA.PL_THRESHOLD 0.7 TRAINER.MAPLE_MTDA.PL_STUDENT_THRESHOLD 0.7 TRAINER.MAPLE_MTDA.PL_USE_STUDENT_LOW_CONF_MASK True" \
+bash scripts/maple_mtda/run_officehome_all.sh
+
+python scripts/maple_mtda/collect_officehome_results.py
+```
+
+Example remote screen launch for MaPLe + PL:
+
+```bash
+cd ~/workspace/da_lab
+mkdir -p logs
+LOG=logs/maple_mtda_pl03_$(date +%Y%m%d_%H%M%S).log
+CUDA_VISIBLE_DEVICES=1 ~/miniconda3/bin/screen -dmS maple_pl bash -lc \
+  "cd ~/workspace/da_lab && \
+   source ~/miniconda3/etc/profile.d/conda.sh && \
+   conda activate coop-da && \
+   export DATA=~/workspace/da_lab/data && \
+   export CUDA_VISIBLE_DEVICES=1 && \
+   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
+   METHOD_TAG=maple_mtda_pl03 \
+   EXTRA_OPTS=\"TRAINER.MAPLE_MTDA.LAMBDA_PL 0.3 TRAINER.MAPLE_MTDA.PL_THRESHOLD 0.7 TRAINER.MAPLE_MTDA.PL_STUDENT_THRESHOLD 0.7 TRAINER.MAPLE_MTDA.PL_USE_STUDENT_LOW_CONF_MASK True\" \
+   bash scripts/maple_mtda/run_officehome_all.sh && \
+   python scripts/maple_mtda/collect_officehome_results.py" \
+  > "${LOG}" 2>&1
+```
+
+Note: `train.py` writes most useful training logs to each task output directory
+through Dassl's logger. The screen-level log may be empty if stdout is captured
+by per-task logging. Check task logs directly, for example:
+
+```bash
+tail -f ~/workspace/da_lab/output/officehome_mtda/maple_mtda_pl03/A2CPR/seed1/log.txt
+```
+
+CLIPTSSPMTDA PairGap + PL/KL sweep:
+
+```bash
+bash scripts/clip_tssp_mtda/run_pair_gap_pl_kl_sgd_sweep.sh
+python scripts/clip_tssp_mtda/collect_officehome_results.py --seed 1
+```
+
+The completed SGD sweep used these tags:
+
+```text
+clip_tssp_pair_gap_sgd_pl01
+clip_tssp_pair_gap_sgd_pl02
+clip_tssp_pair_gap_sgd_pl03
+clip_tssp_pair_gap_sgd_pl02_kl001
+clip_tssp_pair_gap_sgd_pl02_kl005
+clip_tssp_pair_gap_sgd_pl02_kl010
+```
+
+The best TSSP result from that sweep was:
+
+```text
+clip_tssp_pair_gap_sgd_pl03: about 84.07 overall.
+```
+
+### Current Modeling Cautions
+
+- Do not continue adding minor variants to deprecated routes unless the user
+  explicitly asks. This includes old V0/V1/GSPA, StylePromptMTDA queue/beta
+  variants, domain-text visual residuals, instance-aware PVC, image-token TSSP,
+  target entropy, and KL-first variants.
+- The clearest active signal is frozen-CLIP pseudo labeling on target batches.
+- If proposing a new model, compare it against both `CLIPTSSPMTDA + PL03` and
+  `MaPLeMTDA + PL03`.
+- Future promising direction: MaPLe-like multi-modal prompt backbone plus
+  MTDA-native target/domain modules, rather than pure text-side style prompt
+  tuning or pure CLIP PairGap token tuning.
+- Be careful with output roots:
+  - MaPLe scripts use `output/officehome_mtda/...`
+  - CLIPTSSP scripts use `output/office_home_mtda/...`
+- PyTorch 2.6 checkpoint loading can fail on old checkpoints because of the
+  `weights_only=True` default. Prefer fresh output directories for new ablations
+  unless resume has been explicitly tested.
+
 ## Active Branch Status
 
 当前活跃研究分支已切换为：
