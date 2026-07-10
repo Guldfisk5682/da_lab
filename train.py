@@ -32,6 +32,7 @@ import trainers.cocoop_mtda
 import trainers.cocoop_vpt_mtda
 import trainers.clip_tssp_mtda
 import trainers.clip_vpt_mtda
+import trainers.maple_continuous_mtda
 import trainers.maple_mtda
 import trainers.style_prompt_mtda
 import trainers.zsclip
