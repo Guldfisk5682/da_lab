@@ -47,7 +47,9 @@ def main():
     method_dirs = [
         path for path in sorted(OUTPUT_ROOT.iterdir())
         if path.is_dir()
-        and path.name.startswith(("maple_mtda", "maple_continuous_mtda"))
+        and path.name.startswith(
+            ("maple_mtda", "maple_continuous_mtda", "maple_continuous_shared_mtda")
+        )
     ]
     for method_dir in method_dirs:
         for source, targets in SOURCES.items():
