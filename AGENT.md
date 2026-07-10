@@ -1,28 +1,38 @@
 # AGENT.md
 
-## Current Handoff Quick Notes
-
 Last updated: 2026-07-10.
 
-This project is currently in the `clip-vpt-mtda` branch. The active research
-focus has shifted again after the latest Office-Home SS-MTDA results:
+This file is the handoff note for future agents working on `da_lab`. Keep it
+short, current, and operational. Do not turn it back into a long historical
+prompt dump.
+
+## Current Focus
+
+Active branch:
 
 ```text
-Current strongest observation:
-  Pseudo-label regularization from frozen zero-shot CLIP is a strong target-side
-  adaptation signal for source-available closed-set SS-MTDA.
-
-Current best seed1 result:
-  MaPLeMTDA + PL(lambda=0.3): about 84.45 overall 12-task average.
-
-Important implication:
-  The earlier CLIPTSSPMTDA PairGap structure is useful but not yet stronger than
-  a MaPLe-style multi-modal prompt backbone with the same PL objective.
-  Future model work should consider a MaPLe-like backbone plus MTDA/domain-aware
-  components, rather than continuing to over-tune the current pure TSSP path.
+clip-vpt-mtda
 ```
 
-Key seed1 numbers to remember:
+Current research setting:
+
+```text
+Dataset: Office-Home
+Protocol: source-available closed-set SS-MTDA
+Backbone: CLIP ViT-B/16
+Current strongest baseline: MaPLeMTDA + frozen-CLIP pseudo-label loss
+```
+
+Most important finding so far:
+
+```text
+Frozen zero-shot CLIP pseudo-labeling on target batches is the clearest positive
+signal. It improves both CLIPTSSPMTDA and MaPLeMTDA. MaPLeMTDA + PL currently
+beats CLIPTSSPMTDA + PL, so future model work should probably use a MaPLe-like
+multi-modal prompt backbone rather than continuing to over-tune pure TSSP.
+```
+
+Key seed1 Office-Home SS-MTDA numbers:
 
 ```text
 CoCoOpMTDA baseline:             about 83.40
@@ -31,39 +41,49 @@ CLIPTSSPMTDA PairGap + SGD PL03: about 84.07
 MaPLeMTDA + PL03:                about 84.45
 ```
 
-KL status:
+Current recommended main control:
 
 ```text
-KL to frozen CLIP logits is not part of the current main method.
-In the SGD sweep it behaved like a weak/unstable regularizer and did not beat
-single PL. Keep KL only as an ablation unless the user explicitly reopens it.
+MaPLeMTDA + PL(lambda=0.3)
 ```
 
-### Data And Result Backups
+Current recommended comparison:
 
-Local workspace:
+```text
+CLIPTSSPMTDA PairGap + SGD PL(lambda=0.3)
+```
+
+## Golden Rules
+
+- Do not download datasets or model weights locally.
+- Do not run long training locally.
+- Real data and real training happen on the remote server.
+- Local work should be code edits, docs, scripts, dry-runs, and lightweight syntax checks.
+- Preserve original CoOp/CoCoOp trainers unless the user explicitly asks otherwise.
+- Keep new experiment outputs separated by method tags to avoid checkpoint/resume contamination.
+- Do not revive old failed routes unless the user explicitly asks for a targeted ablation.
+
+## Paths And Backups
+
+Local repo:
 
 ```text
 /home/txc_king/dldic/da_lab
 ```
 
-Remote server workspace:
+Remote repo:
 
 ```text
 ~/workspace/da_lab
 ```
 
-Remote Office-Home data is already prepared at:
+Remote prepared Office-Home data:
 
 ```text
 ~/workspace/da_lab/data/office_home
 ```
 
-Do not download datasets or model weights locally. Local work should be code,
-scripts, docs, and lightweight dry-runs only. Real dataset access and real
-training happen on the remote server.
-
-Latest important result backups are stored locally in:
+Latest local result backups:
 
 ```text
 /home/txc_king/dldic/da_lab/results/officehome_clip_tssp_seed1_2026-07-10.md
@@ -73,7 +93,7 @@ Latest important result backups are stored locally in:
 /home/txc_king/dldic/da_lab/results/officehome_maple_mtda_seed1_2026-07-10.csv
 ```
 
-Remote latest generated result files are:
+Latest remote generated results:
 
 ```text
 ~/workspace/da_lab/results/officehome_clip_tssp_seed1.md
@@ -83,16 +103,16 @@ Remote latest generated result files are:
 ~/workspace/da_lab/results/officehome_maple_mtda_seed1.csv
 ```
 
-Historical local backups also exist in `results/`, including:
+Older recovered backups also exist under local `results/`, especially:
 
 ```text
 officehome_key_results_recovered_2026-07-08.*
 officehome_maple_mtda_seed1_2026-07-08.*
 ```
 
-### Remote Access
+## Remote Server Workflow
 
-Use the configured SSH alias:
+SSH:
 
 ```bash
 ssh lab-server
@@ -106,56 +126,53 @@ source ~/miniconda3/etc/profile.d/conda.sh
 conda activate coop-da
 ```
 
-Remote GPU notes:
-
-```text
-The server has two RTX 4090 GPUs.
-Prefer explicitly setting CUDA_VISIBLE_DEVICES before training.
-Recent stable long runs used CUDA_VISIBLE_DEVICES=1.
-Use PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for long training jobs.
-```
-
-Check GPU and background jobs:
+GPU/screen checks:
 
 ```bash
 nvidia-smi
 ~/miniconda3/bin/screen -list
 ```
 
-`screen` is installed under Miniconda. If `screen` is not found in a shell,
-use the full path:
+Notes:
 
-```bash
-~/miniconda3/bin/screen
+```text
+The server has two RTX 4090 GPUs.
+Prefer explicit CUDA_VISIBLE_DEVICES before training.
+Recent stable runs used CUDA_VISIBLE_DEVICES=1.
+Use PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for long jobs.
+screen is installed at ~/miniconda3/bin/screen.
 ```
 
-There may be an old detached screen with a name like `pts-8...`; do not assume
-it is the active run. New runs should use explicit names such as `maple_pl`,
-`run_recover`, or another descriptive tag.
+If a screen-level log is empty, check the per-task Dassl log instead:
 
-### Git And Code Workflow
+```bash
+tail -f ~/workspace/da_lab/output/officehome_mtda/maple_mtda_pl03/A2CPR/seed1/log.txt
+```
+
+## Git Workflow
 
 Default workflow:
 
 ```text
-1. Edit code locally in /home/txc_king/dldic/da_lab.
+1. Edit locally.
 2. Commit locally.
 3. Push to temp/Gitee.
-4. SSH to the server.
-5. Pull on the remote.
+4. SSH to server.
+5. Pull on server.
 6. Run training in screen.
 ```
 
-Local push:
+Local:
 
 ```bash
+cd /home/txc_king/dldic/da_lab
 git status --short
 git add <files>
 git commit -m "<message>"
 git push temp clip-vpt-mtda
 ```
 
-Remote pull:
+Remote:
 
 ```bash
 ssh lab-server
@@ -167,14 +184,11 @@ Important:
 
 ```text
 Remote origin currently points to the Gitee/temp mirror.
-Do not rely on GitHub origin from the server unless the user confirms network
-and authentication are fixed.
+Do not assume GitHub origin works from the server.
+Local .tmp/ contains temporary reference repos/materials and must not be committed.
 ```
 
-Local `.tmp/` is untracked and contains temporary reference materials/clones.
-Do not commit `.tmp/`.
-
-### Active Training Entrypoints
+## Active Training Entrypoints
 
 MaPLe baseline:
 
@@ -183,7 +197,7 @@ bash scripts/maple_mtda/run_officehome_all.sh
 python scripts/maple_mtda/collect_officehome_results.py
 ```
 
-MaPLe + PL(lambda=0.3), current strongest control:
+MaPLe + PL(lambda=0.3):
 
 ```bash
 METHOD_TAG=maple_mtda_pl03 \
@@ -213,14 +227,6 @@ CUDA_VISIBLE_DEVICES=1 ~/miniconda3/bin/screen -dmS maple_pl bash -lc \
   > "${LOG}" 2>&1
 ```
 
-Note: `train.py` writes most useful training logs to each task output directory
-through Dassl's logger. The screen-level log may be empty if stdout is captured
-by per-task logging. Check task logs directly, for example:
-
-```bash
-tail -f ~/workspace/da_lab/output/officehome_mtda/maple_mtda_pl03/A2CPR/seed1/log.txt
-```
-
 CLIPTSSPMTDA PairGap + PL/KL sweep:
 
 ```bash
@@ -228,7 +234,7 @@ bash scripts/clip_tssp_mtda/run_pair_gap_pl_kl_sgd_sweep.sh
 python scripts/clip_tssp_mtda/collect_officehome_results.py --seed 1
 ```
 
-The completed SGD sweep used these tags:
+Completed TSSP SGD sweep tags:
 
 ```text
 clip_tssp_pair_gap_sgd_pl01
@@ -239,1247 +245,153 @@ clip_tssp_pair_gap_sgd_pl02_kl005
 clip_tssp_pair_gap_sgd_pl02_kl010
 ```
 
-The best TSSP result from that sweep was:
+Output-root gotcha:
 
 ```text
-clip_tssp_pair_gap_sgd_pl03: about 84.07 overall.
+MaPLe scripts use:    output/officehome_mtda/...
+CLIPTSSP scripts use: output/office_home_mtda/...
 ```
 
-### Current Modeling Cautions
+## What Worked
 
-- Do not continue adding minor variants to deprecated routes unless the user
-  explicitly asks. This includes old V0/V1/GSPA, StylePromptMTDA queue/beta
-  variants, domain-text visual residuals, instance-aware PVC, image-token TSSP,
-  target entropy, and KL-first variants.
-- The clearest active signal is frozen-CLIP pseudo labeling on target batches.
-- If proposing a new model, compare it against both `CLIPTSSPMTDA + PL03` and
-  `MaPLeMTDA + PL03`.
-- Future promising direction: MaPLe-like multi-modal prompt backbone plus
-  MTDA-native target/domain modules, rather than pure text-side style prompt
-  tuning or pure CLIP PairGap token tuning.
-- Be careful with output roots:
-  - MaPLe scripts use `output/officehome_mtda/...`
-  - CLIPTSSP scripts use `output/office_home_mtda/...`
-- PyTorch 2.6 checkpoint loading can fail on old checkpoints because of the
-  `weights_only=True` default. Prefer fresh output directories for new ablations
-  unless resume has been explicitly tested.
-
-## Active Branch Status
-
-当前活跃研究分支已切换为：
+Pseudo-label target regularization:
 
 ```text
-clip-vpt-mtda
+Teacher: frozen zero-shot CLIP logits.
+Student: current model target logits.
+Loss: CE(student logits, teacher argmax), masked by teacher confidence and,
+optionally, low student confidence.
+Best current weight: lambda_pl=0.3.
 ```
 
-当前主线目标不再是 `Office-31 / V0 / V1 / legacy-GSPA / StylePromptMTDA`。
-这些路线仅作为历史参考或基础设施来源保留在：
-
-- `archive/v0_v1_ablation/`
-- `archive/legacy_gspa/`
-
-当前默认研究目标是：
+PairGap TSSP:
 
 ```text
-Dataset: Office-Home
-Protocol: source-available closed-set SS-MTDA
-Backbone: CLIP ViT-B/16
-Base method: frozen CLIP zero-shot
-Previous method: CLIPVPTMTDA
-Current method: CLIPTSSPMTDA
-Core idea: move beyond VCTX by testing MTDA-native target-set style tokens,
-inspired by AD-CLIP but not copied directly.
+Extract all 12 frozen CLIP ViT hidden states.
+Per layer: concat token mean/std -> MLP -> text-space style token.
+Compress adjacent layer tokens into six source/target/gap groups.
+Prompt order around [source, gap, target] was better than no-gap variants.
+This helped, but did not beat MaPLe + PL.
 ```
 
-新方向要求：
-
-1. 不下载真实数据集或模型权重，除非用户明确要求并且在远程服务器执行。
-2. 不再把 hidden-state style swap / gate / last3 tuning 作为默认方法。
-3. 保持原始 `CoOp / CoCoOp` trainer 可用。
-4. `StylePromptMTDA` 和 CoCoOp 上的 instance/domain-text/target-IM 扩展已被判定为收益不足的历史实验，不要继续堆新结构。
-5. 新增实验优先围绕 `OfficeHomeMTDA -> CLIPTSSPMTDA` 这条主路径展开。
-6. `CLIPVPTMTDA` 的 B0 为 frozen CLIP zero-shot；B1 只训练 `image_encoder.vctx`，冻结 CLIP 主体和固定 zero-shot text prompts。
-7. `CLIPTSSPMTDA` 冻结 CLIP 主体，只训练 multi-layer style projector，并且第一版只使用 source CE。
-8. 本地只做 `train.py --help`、synthetic smoke test、脚本与日志结构验证。
-
-`CLIPVPTMTDA` B0/B1:
+MaPLeMTDA:
 
 ```text
-B0:
-  image -> frozen CLIP visual encoder
-  text  -> fixed "a photo of a {class}." prompts
-  eval only
-
-B1:
-  image -> [CLS + patch tokens + persistent VCTX]
-  frozen CLIP visual transformer
-  fixed zero-shot text prompts
-  source CE trains only VCTX
+MaPLe-style multi-modal prompt learning is a strong backbone in this SS-MTDA
+setting. Once target PL is added, it becomes the current best seed1 control.
 ```
 
-Entrypoints:
+## Failed Or Low-Value Routes
+
+Treat these as lessons, not active tasks:
+
+- Office-31 V0/V1 shallow hidden-state style fusion, final feature gate, legacy
+  GSPA hidden-state cross-style swap, and gate ablations did not produce a
+  durable direction. Keep them archived/history-only.
+- Pure CoCoOp text-side target style prompt modulation gave tiny and unstable
+  gains. Do not keep tuning style queues, beta scalars, or target-style text
+  prompt bias as the main story.
+- Persistent VCTX on CoCoOp/CLIP gave small gains, but insert-position, deeper
+  replacement prompts, large context counts, domain-text residuals, and ViaPT-like
+  instance prompts were not reliable enough to be the core method.
+- TSSP image tokens (`img12/img6/img4`) underperformed PairGap; do not revive
+  image-token injection unless there is a new reason.
+- Target entropy and class-balance information maximization did not become a
+  stable main objective.
+- KL to frozen CLIP logits was weaker than PL. It can stay as an ablation, but
+  should not be the default objective.
+- AdamW at tested settings did not beat the stronger SGD PL runs. Use optimizer
+  changes as controlled ablations only.
+
+## Direction For Future Agents
+
+If asked to improve the method, start from this hierarchy:
+
+```text
+1. Keep MaPLeMTDA + PL03 as the strongest current control.
+2. Compare any new idea against MaPLeMTDA + PL03 and CLIPTSSPMTDA PairGap + PL03.
+3. Prefer MaPLe-like multi-modal prompt backbones plus MTDA-native target/domain
+   modules.
+4. Keep frozen-CLIP pseudo-labeling as a first-class target-side signal.
+5. Avoid adding many tiny prompt variants without a clear hypothesis.
+```
+
+Potential next ideas:
+
+```text
+MaPLe + MTDA domain/style/gap tokens.
+MaPLe + stronger but still conservative pseudo-label scheduling.
+Multi-seed validation for MaPLe + PL03 and the best TSSP + PL03.
+DomainNet transfer only after Office-Home direction is stable.
+```
+
+## Legacy Files And Infrastructure
+
+Archived/legacy routes may still exist in the repo:
+
+```text
+archive/v0_v1_ablation/
+archive/legacy_gspa/
+trainers/style_prompt_mtda.py
+trainers/cocoop_vpt_mtda.py
+trainers/clip_tssp_mtda.py
+scripts/gspa_legacy_ablation/
+scripts/style_prompt_mtda/
+scripts/clip_tssp_mtda/
+```
+
+Do not delete them casually; they preserve reproducibility and old comparisons.
+But do not treat them as current research instructions.
+
+Useful infrastructure to preserve:
+
+```text
+datasets/office_home_mtda.py
+trainers/mtda_base.py
+scripts/datasets/download_officehome.sh
+scripts/datasets/verify_officehome_layout.sh
+scripts/maple_mtda/
+scripts/clip_tssp_mtda/collect_officehome_results.py
+scripts/clip_tssp_mtda/plot_tensorboard_curves.py
+```
+
+## Minimal Sanity Checks
+
+Local, if dependencies exist:
 
 ```bash
-bash scripts/clip_vpt_mtda/run_officehome_all.sh clip_zs
-bash scripts/clip_vpt_mtda/run_officehome_all.sh clip_vpt
-python scripts/clip_vpt_mtda/collect_officehome_results.py
-
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_full
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_no_gap
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_gap
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style3_gap1
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style4_gap1
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style3_gap3
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style4_gap4
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style1_gap3
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_style1_gap4
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img12
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img6
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img4
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_em
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_img6_em
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_vctx8
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_vctx8_em_detach
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_adamw2e3
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_adamw1e4
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_kl
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_pl
-bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_pl_kl
-bash scripts/clip_tssp_mtda/run_pairgap_5variants.sh
-EVAL_EVERY_EPOCH=1 bash scripts/clip_tssp_mtda/run_officehome_all.sh clip_tssp_pair_gap_adamw1e4
-python scripts/clip_tssp_mtda/collect_officehome_results.py
-python scripts/clip_tssp_mtda/plot_tensorboard_curves.py --method clip_tssp_pair_gap --seed 1
-python scripts/clip_tssp_mtda/plot_tensorboard_curves.py --method clip_tssp_pair_gap_adamw1e4 --seed 1 --eval-source log
+python train.py --help
 ```
 
-`CLIPTSSPMTDA` structure:
-
-```text
-image -> frozen CLIP ViT-B/16
-  -> collect all 12 visual hidden states
-  -> per layer: concat(mean(tokens), std(tokens))
-  -> shared style projector layer-wise MLP -> text-side style tokens
-
-optional adapted visual path:
-  image -> frozen CLIP ViT-B/16 + trainable persistent VCTX
-  -> final image feature
-
-train source prompt:
-  [source instance style tokens, target-set style tokens, optional gap tokens, class]
-
-eval prompt:
-  [EMA source style prototype, EMA target-set style prototype, optional gap tokens, class]
-
-loss:
-  source CE
-  optional fixed-weight target entropy with detached text features
-```
-
-上一阶段 `CoCoOpVPTMTDA` 仍保留为强基线/负结果参考：
-
-`CoCoOpVPTMTDA` 结构：
-
-```text
-image
-  -> patch embedding
-  -> [CLS + patch tokens]
-  -> append persistent visual context tokens after patch tokens
-  -> for blocks 1..VISION_PROMPT_DEPTH:
-       replace visual prompt tokens with vctx[layer]
-       run frozen CLIP ViT block
-  -> CLS image feature
-  -> CoCoOp metanet -> dynamic text prompt
-  -> source CE loss
-```
-
-Instance-aware PVC residual:
-
-```text
-image
-  -> early patch tokens before CLIP ViT block 1
-  -> Conv1x1 + GELU + Conv3x3 + GELU + AvgPool
-  -> mean/log_std for a per-image residual distribution
-  -> InstanceVCTXGenerator
-  -> per-image visual prompt tokens
-  -> residual mode: persistent VCTX + beta * instance tokens
-  -> append mode: [persistent VCTX, beta * instance tokens]
-```
-
-Target information maximization:
-
-```text
-source batch -> CE loss
-target batches -> sample entropy minimization + class-balance KL
-loss = source CE + lambda_ent * loss_ent + lambda_div * loss_div
-```
-
-This path intentionally adds no new prompt structure. Use it to test whether
-target-side objectives can move the strong CoCoOpVPTMTDA baseline before adding
-domain-specific prompt banks or other modules.
-
-维护约定：
-
-- 新主线新增独立 trainer/config/script，不要改坏 `trainers/cocoop.py`。
-- `StylePromptMTDA` 可以继续保留用于复现实验表，但不再作为默认方法。
-- 新方法输出目录必须和历史方法分开，例如 `output/office_home_mtda/cocoop_vpt/...`。
-- VPT 超参扫描使用 `METHOD_TAG` 分目录，例如 `cocoop_vpt_ctx4_d3`。
-- `insert` prompt position 和 domain-text guided visual residual 已经在实验中表现不佳，不要继续作为主线维护。
-- 如果后续要做 MaPLe-style coupling，先保留 `CoCoOpVPTMTDA` 作为 persistent VCTX baseline。
-
-## Project Mission
-
-This repository is for a fast, reproducible prototype of a CoCoOp-based unsupervised domain adaptation method.
-
-The immediate goal is **not** to build a full paper system. The immediate goal is to:
-
-1. initialize and reproduce the official CoOp/CoCoOp codebase;
-2. verify that CLIP ViT-B/16 + CoCoOp can run on Office-31;
-3. implement a V0 shallow hidden-state statistical adaptation module;
-4. test whether the V0 forward path, training loop, and evaluation protocol are correct.
-
-The target research setting for V0 is:
-
-```text
-Source-available single-source single-target UDA
-Dataset: Office-31
-Backbone: CLIP ViT-B/16
-Base method: CoCoOp
-Adaptation point: CLIP visual transformer block 3 output
-Modified tokens: patch tokens only
-Main module: shallow hidden-state normalize-restore + learnable gate
-```
-
----
-
-## Non-Negotiable Rules
-
-1. **Start from the official CoOp repository.**
-   - Use: `https://github.com/KaiyangZhou/CoOp`
-   - CoCoOp is implemented in the same repository.
-   - Do not rewrite the entire training framework unless absolutely necessary.
-
-2. **Keep the original baseline code intact.**
-   - Do not destructively modify the original `trainers/cocoop.py`.
-   - Create new files for the V0 method.
-   - Recommended names:
-     - `trainers/cocoop_da_v0.py`
-     - `clip/shallow_adapt.py` or `models/shallow_adapt.py`
-     - `configs/trainers/CoCoOpDA/vit_b16_v0.yaml`
-
-3. **Prioritize reproducibility over novelty.**
-   - First reproduce official CoCoOp/CLIP behavior.
-   - Then add Office-31 support.
-   - Then add the V0 module.
-   - Do not implement multi-source, source-free, uncertainty, DANN, CDAN, MCC, pseudo-labeling, or FiLM/adapter variants in the first pass.
-
-4. **Do not unfreeze the CLIP visual encoder in V0 Stage 1.**
-   - Stage 1 trains only the V0 adaptation module and gate.
-   - Stage 2 may optionally unfreeze the CoCoOp prompt learner.
-   - Do not unfreeze CLIP visual blocks unless explicitly requested later.
-
-5. **Gate is applied at the shallow hidden-state level.**
-   - The V0 method modifies the hidden state after visual transformer block 3.
-   - The fused hidden state is passed through visual blocks 4-12.
-   - Do not implement the two-final-feature-branch version for V0.
-
----
-
-## Work Log
-
-- 2026-06-05: Merged `cocoop-vpt-mtda` into `main`, then opened `clip-vpt-mtda` for the CLIP-first reset. Added `CLIPVPTMTDA` B0/B1: B0 evaluates frozen zero-shot CLIP on Office-Home SS-MTDA, while B1 trains only persistent appended VCTX on top of frozen CLIP with fixed text prompts.
-- 2026-06-06: Added `CLIPTSSPMTDA` as the next CLIP-first branch experiment. It maps all 12 frozen CLIP ViT hidden-state mean/std statistics into text-side target-set style tokens. `clip_tssp_full` uses source-style, target-set, and gap tokens; `clip_tssp_no_gap` removes the gap tokens for ablation. CLIP remains frozen and the first version trains only the style projector with source CE.
-- 2026-06-06: Added three focused TSSP ablations. `clip_tssp_gap` changes the 12-layer prompt order from `[source, target, gap]` to `[source, gap, target]`; `clip_tssp_pair` averages adjacent projected layer tokens into six `[source, target]` token groups; `clip_tssp_pair_gap` combines six-layer pair compression with `[source, gap, target]`. The TSSP collector now reports per-target-domain averages and the overall mean across all 12 SS-MTDA transfer accuracies.
-- 2026-06-06: Split TSSP compression into independent `STYLE_GROUP_SIZE` and `GAP_GROUP_SIZE` controls. Added six middle-gap runs covering style-only 3/4-layer grouping, matched style+gap 3/4-layer grouping, and gap-only 3/4-layer grouping. The projector still produces all 12 raw layer tokens; fixed adjacent-layer means are applied separately before prompt assembly.
-- 2026-06-06: Fixed PairGap (`S6/G6/T6`) as the TSSP style backbone and added per-image content tokens. Each visual layer is mean-pooled across tokens and independently projected into text space. The `img12`, `img6`, and `img4` runs retain all layers or average adjacent groups of two/three before appending image tokens as `[S6, G6, T6, I]`. Training still uses source CE only.
-- 2026-06-07: Added a fixed-weight target conditional entropy ablation. `clip_tssp_pair_gap_em` applies domainwise `L_em` to PairGap without image tokens, while `clip_tssp_pair_gap_img6_em` applies the same `lambda_em=0.01` with source/target Img6 tokens. Entropy is computed per target sample over classes and then averaged equally across target domains; `lambda_em=0` preserves and skips the old target-logit path.
-- 2026-06-07: Added the PairGap plus persistent VCTX8 vision-side experiment. A clean frozen CLIP pass supplies hidden states to PairGap, while a shared persistent appended VCTX pass produces source/target final image features. `clip_tssp_pair_gap_vctx8` uses source CE only; `clip_tssp_pair_gap_vctx8_em_detach` adds fixed `0.01 L_em` with detached target text features so entropy gradients update VCTX but not the style projector.
-- 2026-06-08: Added `scripts/clip_tssp_mtda/plot_tensorboard_curves.py` for TensorBoard diagnostics. It reads Office-Home MTDA event files, plots per-target-domain eval curves and key train curves, writes replace-in-place PNGs plus a summary CSV under `results/`, and is ready for upcoming pseudo-label/KL metrics such as coverage, agreement, and KL loss.
-- 2026-06-08: Added distinct AdamW PairGap launcher tags, `clip_tssp_pair_gap_adamw2e3` and `clip_tssp_pair_gap_adamw1e4`, so optimizer ablations do not reuse the original `clip_tssp_pair_gap` output directory or accidentally load old SGD checkpoints.
-- 2026-06-08: Added frozen-CLIP target-side constraints for PairGap. `clip_tssp_pair_gap_kl` uses KL(student target logits || frozen CLIP reference logits), `clip_tssp_pair_gap_pl` uses conservative high-confidence frozen-CLIP pseudo labels only when the student is still low-confidence, and `clip_tssp_pair_gap_pl_kl` combines both. `scripts/clip_tssp_mtda/run_pairgap_5variants.sh` runs O0/O1/K0/P0/KP0 in one overnight command and then collects results plus TensorBoard curves.
-- 2026-06-08: Added diagnostic per-epoch target evaluation via `TEST.EVAL_EVERY_EPOCH` and the launcher env `EVAL_EVERY_EPOCH=1`. This is for curve inspection only; default runs still evaluate once after training. The TensorBoard plotting script can now auto-select between TensorBoard eval scalars and `log.txt` eval lines, writes an `_eval_curve.csv`, and warns when only one eval epoch exists.
-- 2026-06-03: Merged `ss-mtda-style-prompt` into `main` as infrastructure, then opened `cocoop-vpt-mtda` for the new multi-prompt DA direction. The merge keeps Office-Home MTDA dataloading, `CoCoOpMTDA`, Office-Home download/verify scripts, result collection, and server CUDA fixes.
-- 2026-06-03: Marked `StylePromptMTDA` as a deprecated negative-result path. Experiments showed pure text-side target-style prompt modulation gives only tiny and unstable gains over `CoCoOpMTDA`, so future work should not keep tuning style queue/domain-mean prompt bias.
-- 2026-06-03: Added the first new active method, `CoCoOpVPTMTDA`: CoCoOp text prompt learning plus an independent shallow visual prompt tensor appended to CLIP ViT tokens. This is the first multi-prompt tuning DA experiment and should be compared against `CoCoOpMTDA`.
-- 2026-06-03: Extended `CoCoOpVPTMTDA` from shallow-only VPT to depth-configurable VPT. `VISION_PROMPT_DEPTH=1` preserves the shallow setting, while larger depths use independent per-layer visual prompt tensors and replace prompt tokens before each prompted block.
-- 2026-06-04: Fixed the depth-configurable VPT path so `VISION_PROMPT_DEPTH=1` is exactly equivalent to the original shallow VPT implementation. The first visual prompt is appended before `ln_pre`; deeper prompts are replaced before later ViT blocks.
-- 2026-06-04: Added `VCTX_POSITION` for visual prompt position ablation. `append` keeps the current persistent VCTX path after patch tokens, while `insert` places VCTX between CLS and patch tokens.
-- 2026-06-04: Added `scripts/style_prompt_mtda/run_seed23_cocoop_vpt.sh` for uninterrupted seed2/3 runs of `CoCoOpMTDA` and `cocoop_vpt_ctx8_d1`, and upgraded `collect_officehome_results.py` to support multi-seed mean/std summaries.
-- 2026-06-05: Added an optional domain-text guided visual context residual to `CoCoOpVPTMTDA`. This uses target domain names encoded by CLIP text features to generate a visual prompt residual with `gamma=0` initialization. It is distinct from the deprecated style-statistics-to-text-prompt route.
-- 2026-06-05: Removed the failed `insert` and domain-text residual paths from the active `CoCoOpVPTMTDA` entry. Added optional ViaPT-style instance-aware PVC: each image uses detached early patch tokens before CLIP ViT block 1, then `InstanceVCTXGenerator` predicts mean/log_std and samples per-image VCTX tokens with learnable `beta=0` initialization. `INSTANCE_AWARE.MODE=residual` adds them to shared VCTX, while `MODE=append` appends them after shared VCTX. Training still uses source CE only.
-- 2026-06-05: Added optional `TARGET_IM` to `CoCoOpVPTMTDA`. This keeps the VCTX structure unchanged and uses unlabeled target batches through sample entropy minimization plus class-balance KL. The default is disabled so existing CoCoOpVPTMTDA/VCTX8 results remain reproducible.
-- 2026-05-30: Created the clean research branch `ss-mtda-style-prompt` and switched the active path away from `Office-31 / V0 / V1 / legacy-GSPA`.
-- 2026-05-30: Archived the old experimental routes into `archive/v0_v1_ablation/` and `archive/legacy_gspa/`, keeping the original `CoOp / CoCoOp` baseline trainers active in the main tree.
-- 2026-05-30: Added `OfficeHomeMTDA` for source-available closed-set single-source multi-target adaptation, with one labeled source domain and three unlabeled target domains per run.
-- 2026-05-30: Added `MultiTargetTrainerXU` and `MultiTargetDataManager` so training can consume `batch_x + batch_u_dict` and evaluation can report per-target accuracy, per-source macro average, and overall average.
-- 2026-05-30: Added `CoCoOpMTDA` as the clean baseline. It reuses the original CoCoOp prompt learner, trains only on source CE, and uses target batches only to validate the multi-target dataflow.
-- 2026-05-30: Added `StylePromptMTDA` v0. It keeps CLIP frozen, extracts shallow patch-token style statistics at visual block 3, maintains one queue per target domain, performs domainwise top-1 queue selection, computes a style gap, and injects the resulting `pi_style` into the prompt learner via `ctx + pi_img + beta * pi_style`.
-- 2026-05-30: Added `models/clip_vit.py` and `models/style_prompt.py` to hold reusable CLIP ViT shallow-token helpers, style extraction, target-style queues, and the style MLP.
-- 2026-05-30: Added `scripts/style_prompt_mtda/run_officehome_one.sh`, `run_officehome_all.sh`, and `collect_officehome_results.py` as the new experiment entrypoints.
-- 2026-05-30: Added `scripts/datasets/download_officehome.sh` and `verify_officehome_layout.sh`. The downloader now normalizes the common official Office-Home archive layout into `DATA/office_home/{art,clipart,product,real_world}/...`.
-- 2026-05-30: Wrote `docs/migration_to_style_prompt_mtda.md` to document archived files, retained infrastructure, new entrypoints, and smoke-test commands.
-- 2026-05-30: Verified `python train.py --help` under `dlenv` and completed local synthetic smoke tests for both `CoCoOpMTDA` and `StylePromptMTDA` using a tiny fake `office_home/` tree and a local random ViT-B/16 checkpoint, without downloading any real data or weights.
-
-- 2026-05-19: Found and fixed the Office-31 domain parsing issue caused by `argparse.REMAINDER` swallowing `TRAINER.COCOOP_DA.TRAIN.STAGE`; added `--` before config overrides in the train scripts.
-- 2026-05-19: Added an OfficeHome dataset config and a dedicated OfficeHome training script for CoCoOpDAV0.
-- 2026-05-19: Diagnosed that CoOp does not provide an Office-31 downloader or a real dataset-root resolver; added a practical Office-31 download-and-normalize script and made the train/eval scripts fail fast when `DATA` is still a placeholder.
-- 2026-05-19: Added an Office-31 layout verification script and expanded the README with a full cloud workflow covering environment setup, download, verification, training, and evaluation.
-- 2026-05-19: Fixed Office-31 download to work with older `gdown` by falling back when `--fuzzy` is unsupported.
-- 2026-05-19: Office-31 download from Google Drive timed out; verified an existing dataset at `/workspace/qw/DAMP-main/dataset/office31` and linked it into `da_lab/data/office31` for training.
-- 2026-05-19: Training crashed because `--` was included in `args.opts`; stripped the leading `--` in `train.py` before merging config overrides.
-- 2026-05-19: Training crashed on a YACS type mismatch for `TRAINER.COCOOP_DA.TRAIN.TRAIN_PROMPT_LEARNER`; updated the train script to pass `True/False` instead of lowercase strings.
-- 2026-05-19: Training crashed with fp16 vs fp32 mismatch in `ShallowGate`; casted reference stats to the patch-token dtype/device before fusion.
-- 2026-05-19: Training still hit fp16 vs fp32 in `ShallowAdaptation`; casted scale/bias to the token dtype to keep adapted tokens in fp16.
-- 2026-05-19: Training still hit fp16 vs fp32; casted normalized tokens to patch-token dtype before shallow adaptation.
-- 2026-05-19: Training still hit fp16 vs fp32; casted adapted tokens to patch-token dtype before gating.
-- 2026-05-19: Training still hit fp16 vs fp32; aligned gate inputs to LayerNorm weight dtype inside `ShallowGate`.
-- 2026-05-19: Training hit fp16 vs fp32 in transformer attention; replaced scalar `1.0` with `torch.ones_like(alpha)` to keep fused tokens in fp16.
-- 2026-05-19: Training still hit fp16 vs fp32 in transformer blocks; cast fused hidden tokens to the original hidden dtype before forwarding.
-- 2026-05-20: Added `office31_train_all.sh` to run all six Office-31 SS-STDA tasks sequentially with auto-eval.
-- 2026-05-20: Updated the Office-31 scripts so output directories follow the selected trainer name and `office31_train_all.sh` now performs explicit post-train evaluation per task.
-- 2026-05-20: Fixed auto-eval for baseline trainers by making `office31_eval.sh` fall back to the latest `model.pth.tar-*` checkpoint when `model-best.pth.tar` is absent.
-- 2026-05-20: Implemented V1 `FinalFeatureGate` as the default DA variant. V1 keeps the shallow layer-3 restat step but delays gating to the final image feature level: `feat_normal` and `feat_adapted` are produced separately, then blended by a scalar gate with `LayerNorm -> Linear(dim, dim/4) -> SiLU -> Linear(dim/4, 1) -> Sigmoid`, zero-initialized last weight, and bias `-4.0`.
-- 2026-05-20: Remote experiment workflow for V1:
-  1. Pull latest `main` and verify the default trainer/config are `CoCoOpDAV1` and `configs/trainers/CoCoOpDA/vit_b16_v1.yaml`.
-  2. Run the official CoCoOp baseline by overriding `TRAINER=CoCoOp` and `CFG=configs/trainers/CoCoOp/vit_b16_c4_ep10_batch1_ctxv1.yaml`.
-  3. Run V1 Stage 1 with learned alpha using the default `office31_train_all.sh`.
-  4. Run V1 ablations by overriding `TRAINER.COCOOP_DA.GATE.FORCE_ALPHA` to `0.0` and `1.0` in direct `train.py` calls or dedicated shell wrappers.
-  5. Only if Stage 1 helps, promote to Stage 2 by setting `STAGE=2`; keep the same V1 config and compare against the Stage 1 checkpoint family.
-- 2026-05-20: Added a clean `GSPALegacy` trainer for the legacy cross-style hidden-state augmentation design. Training uses `source batch + target batch` to create full-token hidden-state swaps after block 4, gates only the final source hidden feature with bias `3.0`, and uses only source CE loss. Eval uses plain single-image CoCoOp-style inference and does not consume a target batch.
-- 2026-05-20: Added dedicated `scripts/gspa_legacy/office31_train.sh`, `office31_eval.sh`, and `office31_train_all.sh` so the legacy path does not depend on `STAGE`, `FORCE_ALPHA`, or the V0/V1 `COCOOP_DA` config switches.
-- 2026-05-20: Added Torch 2.6 checkpoint compatibility by bypassing Dassl's old `torch.load(weights_only=True)` path in local trainers. This fixes `eval-only` loading of `model.pth.tar-*` checkpoints under Torch 2.6.
-- 2026-05-20: Local smoke-test workflow for the remote agent:
-  1. Pull latest `main`.
-  2. Use `scripts/gspa_legacy/office31_train.sh` with `TRAINER=GSPALegacy` and `CFG=configs/trainers/GSPA_LEGACY/vit_b16.yaml`.
-  3. First verify a single A2W run with `DEBUG_PRINT_ONCE=True`; check that `h_s`, `h_t`, `h_s_adapted`, `last_hidden_s_normal`, `last_hidden_s_adapted`, `gate_s`, `fused_s`, and `logits_s` are printed once.
-  4. Confirm the first-batch `gate_mean` is close to `sigmoid(3.0)`, i.e. around `0.95`.
-  5. Use `scripts/gspa_legacy/office31_eval.sh` to confirm eval-only works without a target batch.
-  6. Only after the single-task sanity check passes, expand to `scripts/gspa_legacy/office31_train_all.sh`.
-- 2026-05-20: Added the first ablation-study layer for `GSPALegacy`. Trainer-side naming is now standardized under `TRAINER.GSPA_LEGACY.ABLATION.*`, with support for `GATE_MODE`, `FIXED_GATE_VALUE`, `TRAIN_VISION_LAST3`, `STYLE_MODE`, and `STATS_SCOPE`.
-- 2026-05-20: Implemented `scripts/gspa_legacy_ablation/make_ablation_configs.py`, `run_one.sh`, `run_office31_ablation.sh`, and `collect_results.py`. The first pass covered `L0_full`, `L1_fixed_gate`, and `L2_normal_only`.
-- 2026-05-20: Local ablation smoke validation used a tiny synthetic `Office31Flex` dataset and a local random ViT-B/16 checkpoint only to verify script/dataflow correctness. Verified that:
-  1. `python scripts/gspa_legacy_ablation/make_ablation_configs.py` generates the three config files.
-  2. `bash scripts/gspa_legacy_ablation/run_one.sh L0 A W 1` trains and evaluates into `output/office31_ablation/L0_full/A2W/seed1`.
-  3. The log contains experiment metadata, ablation fields, parameter groups, `loss_ce`, and gate statistics.
-  4. The first-batch `gate_mean` is about `0.9468`, consistent with `sigmoid(3.0)`.
-  5. `python scripts/gspa_legacy_ablation/collect_results.py` successfully parses the A2W result and writes `results/office31_ablation_seed1.csv` and `.md`.
-- 2026-05-21: Extended the ablation suite to cover the remaining Legacy-GSPA variants: `L3_last3_frozen`, `L4_identity_style`, and `L5_patch_only`. The default batch launcher `scripts/gspa_legacy_ablation/run_office31_ablation.sh` now runs `L0-L5` when no experiment code is provided.
-- 2026-05-21: Added optional baseline entries to the ablation launcher:
-  1. `B0_cocoop` uses the standard `CoCoOp` trainer with `configs/trainers/CoCoOp/vit_b16_c4_ep10_batch1_ctxv1.yaml`.
-  2. `B1_last3_tuning` is implemented as the Legacy-equivalent path with `STYLE_MODE=none`, `GATE_MODE=normal_only`, and `TRAIN_VISION_LAST3=true`.
-  3. Both baseline entries write into `output/office31_ablation/...` so they can be summarized by the same `collect_results.py` script.
-- 2026-05-21: Added optional `BACKBONE` passthrough to `scripts/cocoop_da/office31_train.sh` and `office31_eval.sh`, which makes CoCoOp baseline smoke tests possible with a local checkpoint path instead of downloading CLIP weights.
-- 2026-05-20: Fixed `GSPALegacy` DataParallel training by routing `forward_train`/`forward_inference` through the underlying module when multiple GPUs are used.
-- 2026-05-20: Fixed `GSPALegacy` inference to run the full visual stack before the tail; previously `_encode_image_normal` skipped blocks 1..INJECT_AFTER_BLOCK, causing near-random accuracy.
-
----
-
-## Phase 0: Repository Initialization
-
-### Expected commands
-
-Use these as a starting point and adjust only if the official repository instructions differ.
+Remote:
 
 ```bash
-git clone https://github.com/KaiyangZhou/CoOp.git
-cd CoOp
-
-# Create an isolated environment.
-# Prefer the environment style already used on the server.
-# Example:
-conda create -n coop-da python=3.8 -y
+cd ~/workspace/da_lab
+source ~/miniconda3/etc/profile.d/conda.sh
 conda activate coop-da
-
-# Install PyTorch according to the server CUDA version.
-# Then install dependencies required by CoOp and Dassl.
-pip install -r requirements.txt || true
-
-# Install Dassl if required by the official CoOp repo.
-git clone https://github.com/KaiyangZhou/Dassl.pytorch.git ../Dassl.pytorch
-cd ../Dassl.pytorch
-pip install -e .
-cd ../CoOp
-```
-
-If `requirements.txt` is missing or incomplete, inspect the official README and install the minimal dependencies manually.
-
-Typical dependencies may include:
-
-```bash
-pip install ftfy regex tqdm yacs gdown scipy scikit-learn
-pip install git+https://github.com/openai/CLIP.git
-```
-
-Do not guess silently. Record the final working environment in:
-
-```text
-docs/env_setup.md
-```
-
----
-
-## Phase 1: Baseline Smoke Test
-
-Before touching model internals, verify the following:
-
-```bash
 python train.py --help
 ```
 
-Then inspect:
-
-```text
-trainers/cocoop.py
-trainers/coop.py
-trainers/zsclip.py
-clip/
-configs/
-scripts/cocoop/
-```
-
-Document:
-
-1. how CoCoOp builds the CLIP model;
-2. where the visual encoder is called;
-3. where image features are passed into the prompt learner;
-4. where trainable parameters are selected;
-5. how datasets are registered.
-
-Write the findings to:
-
-```text
-docs/codebase_notes.md
-```
-
----
-
-## Phase 2: Office-31 Dataset Support
-
-### Dataset setting
-
-Office-31 domains:
-
-```text
-amazon
-dslr
-webcam
-```
-
-Transfer tasks:
-
-```text
-A -> W
-A -> D
-W -> A
-W -> D
-D -> A
-D -> W
-```
-
-Use source labels. Treat target labels as unavailable during training, but use target labels for evaluation only.
-
-### Required behavior
-
-The training batch must contain:
-
-```python
-batch_x  # labeled source batch
-batch_u  # unlabeled target batch
-```
-
-Use source labels only for supervised classification loss.
-
-Target labels must not be used in the loss.
-
-### Implementation guidance
-
-First check whether the installed Dassl/CoOp framework already supports Office-31 or generic domain adaptation datasets.
-
-If Office-31 is not supported, add a minimal dataset wrapper.
-
-Recommended files:
-
-```text
-datasets/office31.py
-configs/datasets/office31.yaml
-```
-
-The dataset wrapper should support:
-
-```text
-SOURCE_DOMAINS: ["amazon"]
-TARGET_DOMAINS: ["webcam"]
-```
-
-or equivalent config fields already used by Dassl.
-
-Do not hard-code absolute paths. Use config or environment variables:
+Before launching long jobs:
 
 ```bash
-DATA=/path/to/datasets
+git status --short
+nvidia-smi
+~/miniconda3/bin/screen -list
 ```
 
-Expected folder layout can be one of the following, but the loader must document which layout it supports:
+## Maintenance Rule
+
+When new experiments finish, update only these parts:
 
 ```text
-$DATA/office31/amazon/images/...
-$DATA/office31/dslr/images/...
-$DATA/office31/webcam/images/...
+Current Focus
+Paths And Backups
+Active Training Entrypoints
+What Worked
+Failed Or Low-Value Routes
+Direction For Future Agents
 ```
 
-or:
-
-```text
-$DATA/office31/amazon/<class_name>/*.jpg
-$DATA/office31/dslr/<class_name>/*.jpg
-$DATA/office31/webcam/<class_name>/*.jpg
-```
-
-If the actual server layout differs, adapt the dataset wrapper and document it.
-
----
-
-## Phase 3: CoCoOp ViT-B/16 Baseline on Office-31
-
-Run a baseline before implementing V0.
-
-Minimum baseline list:
-
-```text
-CLIP zero-shot, ViT-B/16
-CoCoOp, ViT-B/16
-```
-
-Recommended output directory convention:
-
-```text
-output/office31/cocoop_vit_b16/A2W/seed1/
-output/office31/cocoop_vit_b16/A2D/seed1/
-...
-```
-
-The first smoke test can run only one task:
-
-```text
-A -> W
-```
-
-Acceptance criteria:
-
-1. training starts without dataset or config errors;
-2. image batch shape is correct;
-3. text prompt/class names are correct;
-4. evaluation produces target-domain top-1 accuracy;
-5. the run writes logs and checkpoints into `output/`.
-
-After this works, run all six Office-31 transfer tasks for seed 1.
-
-Record results in:
-
-```text
-results/office31_baseline_seed1.md
-```
-
----
-
-## Phase 4: V0 Model Specification
-
-### Core idea
-
-At CLIP ViT-B/16 visual transformer block 3 output, extract patch-token hidden states from source and target images.
-
-For each source image:
-
-1. split CLS token and patch tokens;
-2. compute source patch-token mean and std;
-3. normalize source patch tokens;
-4. restore normalized source patch tokens using target-domain statistics;
-5. fuse original source patch tokens and restored patch tokens using a learnable gate;
-6. concatenate the original CLS token back;
-7. pass the fused hidden state through the remaining visual transformer blocks;
-8. use the final image feature for CoCoOp logits.
-
-For target images, V0 may implement the symmetric target-to-source path, but keep a config switch:
-
-```text
-ADAPT_MODE: "s2t"      # only source -> target
-ADAPT_MODE: "bidirect" # source -> target and target -> source
-```
-
-Start experiments with `s2t` first if `bidirect` is unstable.
-
----
-
-## Required V0 Forward Path
-
-The intended V0 flow is:
-
-```text
-image
-  -> CLIP patch embedding + positional embedding
-  -> visual transformer block 1
-  -> visual transformer block 2
-  -> visual transformer block 3
-  -> shallow hidden state h_l
-  -> statistical adaptation module
-  -> fused hidden state h_l_fused
-  -> visual transformer block 4 ... block 12
-  -> final CLIP image feature
-  -> CoCoOp prompt learner / text features
-  -> cosine logits
-```
-
-Do **not** implement this V0 as:
-
-```text
-normal branch -> full visual encoder -> final feature
-adapted branch -> full visual encoder -> final feature
-gate(final normal feature, final adapted feature)
-```
-
-That is a possible later version, but not V0.
-
----
-
-## V0 Tensor Contract
-
-For CLIP ViT-B/16 at injection layer `l=3`:
-
-```python
-h_s = visual_forward_until(x_s, layer_idx=3)
-h_t = visual_forward_until(x_t, layer_idx=3)
-```
-
-Expected shapes:
-
-```python
-h_s: [B_s, 1 + N, C]
-h_t: [B_t, 1 + N, C]
-```
-
-For ViT-B/16 with 224x224 inputs:
-
-```text
-N = 196 patch tokens
-C = 768 hidden dim
-```
-
-Split tokens:
-
-```python
-cls_s, p_s = h_s[:, :1, :], h_s[:, 1:, :]
-cls_t, p_t = h_t[:, :1, :], h_t[:, 1:, :]
-```
-
-V0 modifies `p_s` and `p_t` only.
-
-V0 must keep `cls_s` and `cls_t` unchanged.
-
----
-
-## V0 Source-to-Target Restat
-
-Use patch tokens only.
-
-```python
-mu_s = p_s.mean(dim=1, keepdim=True)
-std_s = p_s.std(dim=1, keepdim=True, unbiased=False)
-
-a_s = (p_s - mu_s) / (std_s + eps)
-
-mu_t_bank, std_t_bank = target_stats_bank.get()
-
-p_s_adapted = a_s * std_t_bank + mu_t_bank
-```
-
-Then gate:
-
-```python
-alpha_s = gate_net(p_s, p_s_adapted)
-
-p_s_fused = (1.0 - alpha_s) * p_s + alpha_s * p_s_adapted
-h_s_fused = torch.cat([cls_s, p_s_fused], dim=1)
-```
-
-Then continue the visual encoder:
-
-```python
-img_feat_s = visual_forward_from(h_s_fused, start_layer=4)
-```
-
----
-
-## V0 Target Path
-
-For `ADAPT_MODE="s2t"`:
-
-```text
-Target images may be used only to update target statistics and compute optional target entropy loss.
-The target visual path can remain normal or use source-restored target tokens only if implemented safely.
-```
-
-For `ADAPT_MODE="bidirect"`:
-
-```python
-mu_t = p_t.mean(dim=1, keepdim=True)
-std_t = p_t.std(dim=1, keepdim=True, unbiased=False)
-
-a_t = (p_t - mu_t) / (std_t + eps)
-
-mu_s_bank, std_s_bank = source_stats_bank.get()
-
-p_t_adapted = a_t * std_s_bank + mu_s_bank
-
-alpha_t = gate_net(p_t, p_t_adapted)
-
-p_t_fused = (1.0 - alpha_t) * p_t + alpha_t * p_t_adapted
-h_t_fused = torch.cat([cls_t, p_t_fused], dim=1)
-
-img_feat_t = visual_forward_from(h_t_fused, start_layer=4)
-```
-
----
-
-## Stats Bank Requirements
-
-Implement two EMA statistics banks:
-
-```text
-source_stats_bank
-target_stats_bank
-```
-
-Each bank should track patch-token statistics.
-
-Start with global domain-level statistics, not class-conditional statistics.
-
-Required fields:
-
-```python
-running_mu: Tensor shaped [1, 1, C] or broadcast-compatible
-running_std: Tensor shaped [1, 1, C] or broadcast-compatible
-momentum: float, default 0.99
-initialized: bool
-```
-
-Update using detached batch statistics:
-
-```python
-bank.update(mu_batch.detach(), std_batch.detach())
-```
-
-The batch statistics may first be averaged over batch dimension:
-
-```python
-mu_batch_domain = mu_batch.mean(dim=0, keepdim=True)
-std_batch_domain = std_batch.mean(dim=0, keepdim=True)
-```
-
-Use stable eps:
-
-```python
-eps = 1e-6
-```
-
-Log bank status regularly:
-
-```text
-source_mu_norm
-source_std_mean
-target_mu_norm
-target_std_mean
-```
-
----
-
-## Gate Network Requirements
-
-Start with a simple token-wise and channel-wise gate:
-
-```python
-alpha: [B, N, C]
-```
-
-Recommended implementation:
-
-```python
-class ShallowGate(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.norm_ori = nn.LayerNorm(dim)
-        self.norm_adp = nn.LayerNorm(dim)
-        self.net = nn.Sequential(
-            nn.Linear(dim * 2, dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(dim, dim),
-        )
-        nn.init.constant_(self.net[-1].bias, -2.0)
-
-    def forward(self, p_ori, p_adapted):
-        x = torch.cat(
-            [self.norm_ori(p_ori), self.norm_adp(p_adapted)],
-            dim=-1,
-        )
-        alpha = torch.sigmoid(self.net(x))
-        return alpha
-```
-
-Important:
-
-```text
-The final gate bias must be initialized to a negative value, e.g. -2.0.
-This makes alpha small at the beginning and keeps the model close to original CLIP.
-```
-
-Log:
-
-```text
-alpha_mean
-alpha_std
-alpha_min
-alpha_max
-```
-
----
-
-## V0 Loss Function
-
-Keep V0 simple.
-
-Required:
-
-```python
-loss_src = CE(logits_s_fused, y_s)
-```
-
-Recommended:
-
-```python
-loss_cons = KL(logits_s_normal.detach(), logits_s_fused)
-loss_ent = entropy(logits_t_fused)
-```
-
-Total:
-
-```python
-loss = loss_src + lambda_cons * loss_cons + lambda_ent * loss_ent
-```
-
-Default weights:
-
-```yaml
-LAMBDA_CONS: 0.1
-LAMBDA_ENT: 0.01
-```
-
-If target entropy destabilizes training, set:
-
-```yaml
-LAMBDA_ENT: 0.0
-```
-
-Do not add pseudo-labeling, DANN, CDAN, MCC, or uncertainty loss in V0.
-
----
-
-## Training Stages
-
-### Stage 0: Baseline
-
-Run official CLIP zero-shot and CoCoOp.
-
-No V0 module.
-
-### Stage 1: V0 visual adaptation only
-
-Freeze:
-
-```text
-CLIP visual encoder
-CLIP text encoder
-CoCoOp prompt learner, initially
-```
-
-Train only:
-
-```text
-shallow adaptation module
-gate network
-```
-
-Stats banks are updated by EMA but are not optimized by gradients.
-
-### Stage 2: V0 + CoCoOp prompt learner
-
-Freeze:
-
-```text
-CLIP visual encoder
-CLIP text encoder
-```
-
-Train:
-
-```text
-shallow adaptation module
-gate network
-CoCoOp prompt learner
-```
-
-Use smaller LR for prompt learner than gate/adaptation module if separate parameter groups are easy.
-
-Suggested ratio:
-
-```text
-adaptation module LR = base LR
-prompt learner LR = 0.2x to 0.5x base LR
-```
-
-Do not unfreeze CLIP visual blocks in V0.
-
----
-
-## Implementation Checklist
-
-### Codebase inspection
-
-- [ ] Confirm official CoCoOp trainer entrypoint.
-- [ ] Confirm where CLIP image features are extracted.
-- [ ] Confirm CLIP visual transformer block list name.
-- [ ] Confirm whether the CLIP implementation uses `visual.transformer.resblocks`.
-- [ ] Confirm tensor layout inside CLIP ViT: likely `[sequence, batch, dim]` internally and `[batch, sequence, dim]` externally.
-- [ ] Write `docs/codebase_notes.md`.
-
-### Dataset
-
-- [ ] Add or verify Office-31 dataset support.
-- [ ] Support source domain and target domain config.
-- [ ] Ensure target labels are not used during training.
-- [ ] Evaluate on target test split.
-- [ ] Write `docs/office31_setup.md`.
-
-### Baseline
-
-- [ ] Run CLIP zero-shot ViT-B/16 on A->W.
-- [ ] Run CoCoOp ViT-B/16 on A->W.
-- [ ] Run all six Office-31 tasks for seed 1 if smoke test succeeds.
-- [ ] Save results to `results/office31_baseline_seed1.md`.
-
-### V0 model
-
-- [ ] Add stats bank.
-- [ ] Add shallow gate.
-- [ ] Add forward-until-layer and forward-from-layer path for CLIP ViT.
-- [ ] Inject after block 3.
-- [ ] Modify patch tokens only.
-- [ ] Preserve CLS token.
-- [ ] Continue through remaining visual blocks.
-- [ ] Return fused logits and useful debug tensors.
-
-### V0 training
-
-- [ ] Implement source CE.
-- [ ] Implement optional source consistency loss.
-- [ ] Implement optional target entropy loss.
-- [ ] Log all loss components.
-- [ ] Log alpha statistics.
-- [ ] Log stats-bank diagnostics.
-- [ ] Verify trainable parameter names.
-
-### V0 evaluation
-
-- [ ] Evaluate target-domain top-1 accuracy.
-- [ ] Save per-task results.
-- [ ] Compare to baseline.
-- [ ] Save config and git commit hash with each run.
-
----
-
-## Suggested Config Fields
-
-Add a trainer config similar to:
-
-```yaml
-TRAINER:
-  NAME: "CoCoOpDAV0"
-
-  COCOOP_DA:
-    BACKBONE: "ViT-B/16"
-    INJECT_LAYER: 3
-    MODIFY_CLS: false
-    ADAPT_MODE: "s2t"  # ["s2t", "bidirect"]
-
-    STATS:
-      TYPE: "ema"
-      MOMENTUM: 0.99
-      EPS: 1e-6
-
-    GATE:
-      TYPE: "token_channel"
-      INIT_BIAS: -2.0
-
-    LOSS:
-      LAMBDA_CONS: 0.1
-      LAMBDA_ENT: 0.01
-
-    TRAIN:
-      STAGE: 1
-      FREEZE_VISUAL: true
-      FREEZE_TEXT: true
-      TRAIN_PROMPT_LEARNER: false
-```
-
-Stage 2 can use:
-
-```yaml
-TRAINER:
-  COCOOP_DA:
-    TRAIN:
-      STAGE: 2
-      FREEZE_VISUAL: true
-      FREEZE_TEXT: true
-      TRAIN_PROMPT_LEARNER: true
-```
-
----
-
-## Minimal V0 Pseudocode
-
-```python
-def forward_train(batch_x, batch_u):
-    x_s = batch_x["img"].to(device)
-    y_s = batch_x["label"].to(device)
-
-    x_t = batch_u["img"].to(device)
-
-    # 1. forward to shallow layer
-    h_s = visual_forward_until(x_s, layer_idx=3)
-    h_t = visual_forward_until(x_t, layer_idx=3)
-
-    cls_s, p_s = h_s[:, :1, :], h_s[:, 1:, :]
-    cls_t, p_t = h_t[:, :1, :], h_t[:, 1:, :]
-
-    # 2. update stats banks
-    mu_s, std_s = compute_patch_stats(p_s)
-    mu_t, std_t = compute_patch_stats(p_t)
-
-    source_stats_bank.update(mu_s.detach(), std_s.detach())
-    target_stats_bank.update(mu_t.detach(), std_t.detach())
-
-    mu_t_bank, std_t_bank = target_stats_bank.get()
-
-    # 3. source -> target restat
-    a_s = (p_s - mu_s) / (std_s + eps)
-    p_s_adapted = a_s * std_t_bank + mu_t_bank
-
-    alpha_s = gate(p_s, p_s_adapted)
-    p_s_fused = (1 - alpha_s) * p_s + alpha_s * p_s_adapted
-    h_s_fused = torch.cat([cls_s, p_s_fused], dim=1)
-
-    # 4. continue visual encoder
-    feat_s_fused = visual_forward_from(h_s_fused, start_layer=4)
-
-    # 5. CoCoOp logits
-    logits_s_fused = cocoop_logits(feat_s_fused)
-
-    # Optional target path
-    feat_t_fused = forward_target_path(h_t, p_t, cls_t)
-    logits_t_fused = cocoop_logits(feat_t_fused)
-
-    # 6. losses
-    loss_src = cross_entropy(logits_s_fused, y_s)
-    loss_ent = entropy(logits_t_fused)
-
-    loss = loss_src + lambda_ent * loss_ent
-
-    if use_consistency:
-        with torch.no_grad():
-            feat_s_normal = visual_forward_from(h_s, start_layer=4)
-            logits_s_normal = cocoop_logits(feat_s_normal)
-        loss_cons = kl_divergence(logits_s_normal, logits_s_fused)
-        loss = loss + lambda_cons * loss_cons
-
-    return loss
-```
-
----
-
-## Debugging Requirements
-
-Add a debug mode that runs one batch and prints:
-
-```text
-x_s shape
-x_t shape
-h_s shape
-h_t shape
-p_s shape
-p_t shape
-mu_s shape
-std_s shape
-mu_t_bank shape
-std_t_bank shape
-p_s_adapted shape
-alpha_s shape
-h_s_fused shape
-feat_s_fused shape
-logits_s shape
-loss_src
-```
-
-Also verify:
-
-```python
-assert h_s_fused.shape == h_s.shape
-assert torch.isfinite(h_s_fused).all()
-assert torch.isfinite(logits_s).all()
-assert 0 <= alpha_s.min() and alpha_s.max() <= 1
-```
-
----
-
-## Acceptance Criteria for V0
-
-V0 is considered implemented only if all of the following pass:
-
-1. `python train.py --help` works.
-2. Official CoCoOp trainer still works.
-3. Office-31 A->W baseline runs.
-4. V0 trainer runs one full epoch on A->W without NaN.
-5. V0 logs target-domain evaluation accuracy.
-6. V0 saves config, checkpoint, and log.
-7. Trainable parameter list contains only expected modules in Stage 1:
-   - gate
-   - shallow adaptation module
-   - optionally prompt learner only in Stage 2
-8. The original CoCoOp trainer remains usable.
-
----
-
-## Files to Produce
-
-Codex should produce or update:
-
-```text
-docs/env_setup.md
-docs/codebase_notes.md
-docs/office31_setup.md
-results/office31_baseline_seed1.md
-
-datasets/office31.py                  # if needed
-configs/datasets/office31.yaml         # if needed
-
-trainers/cocoop_da_v0.py
-models/shallow_adapt.py                # or equivalent
-configs/trainers/CoCoOpDA/vit_b16_v0.yaml
-scripts/cocoop_da/office31_train.sh
-scripts/cocoop_da/office31_eval.sh
-```
-
-If any of these files are impossible due to repository structure, document the alternative path.
-
----
-
-## Suggested First Commands for Codex
-
-```bash
-pwd
-ls
-git status
-find . -maxdepth 3 -type f | sort | sed 's#^\./##' | head -200
-
-python train.py --help
-
-sed -n '1,240p' trainers/cocoop.py
-sed -n '1,240p' trainers/coop.py
-find configs -maxdepth 3 -type f | sort
-find scripts -maxdepth 3 -type f | sort
-```
-
-Then inspect the CLIP visual implementation:
-
-```bash
-find . -maxdepth 4 -type f | grep -i clip
-grep -R "class VisionTransformer" -n .
-grep -R "resblocks" -n clip trainers | head -50
-grep -R "encode_image" -n .
-```
-
----
-
-## What Not To Do Yet
-
-Do not implement these until V0 passes:
-
-```text
-multi-source UDA
-multi-target UDA
-source-free DA
-class-conditional statistics
-Wasserstein target-stat selection
-Dirichlet uncertainty
-pseudo-label training
-DANN/CDAN/MCC
-FiLM modulation
-adapter rewriter
-final-feature two-branch gate
-unfreezing CLIP visual layers
-```
-
-These are valid later extensions, but they will slow down the first prototype.
-
----
-
-## Research Notes for Later
-
-The originally proposed alternative structure was:
-
-```text
-normal hidden state -> remaining encoder -> normal final feature
-adapted hidden state -> remaining encoder -> adapted final feature
-gate(normal final feature, adapted final feature)
-```
-
-This is not V0.
-
-Keep it as a possible V1/V2 variant named:
-
-```text
-FinalFeatureGate
-```
-
-V0 should be named something like:
-
-```text
-ShallowStateGate
-CrossStatShallowGate
-CoCoOpDA-V0
-```
-
-The paper story for V0 should be:
-
-```text
-Shallow CLIP-ViT patch tokens preserve domain/style statistics.
-A lightweight normalize-restore module transfers target-domain statistics into source hidden states.
-A learnable gate preserves the original CLIP semantic stream.
-The fused shallow state is processed by the remaining frozen CLIP visual blocks and used by CoCoOp.
-```
-
----
-
-## Final Reminder
-
-The first successful milestone is not high accuracy.
-
-The first successful milestone is:
-
-```text
-official CoCoOp runs
-Office-31 data flow works
-V0 hidden-state injection works
-training does not crash
-target-domain evaluation is logged
-```
-
-Only after that should we optimize accuracy.
+Keep this file concise. If detailed experiment tables are needed, store them in
+`results/` or a dedicated `docs/` file and link the path here.
