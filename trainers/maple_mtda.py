@@ -173,6 +173,7 @@ class CustomMaPLeMTDA(nn.Module):
         self.pl_use_student_low_conf_mask = bool(
             maple_cfg.PL_USE_STUDENT_LOW_CONF_MASK
         )
+        self._init_weak_pl_config(maple_cfg)
         self.debug_print_once = bool(maple_cfg.DEBUG.PRINT_ONCE)
         self._debug_printed = False
 
@@ -186,19 +187,53 @@ class CustomMaPLeMTDA(nn.Module):
             torch.cat([clip.tokenize(prompt) for prompt in zs_prompts]),
         )
 
-        print(f"MaPLeMTDA pseudo-label weight: {self.lambda_pl}")
-        print(f"MaPLeMTDA pseudo-label threshold: {self.pl_threshold}")
-        print(f"MaPLeMTDA pseudo-label student threshold: {self.pl_student_threshold}")
+        log_prefix = getattr(self, "log_prefix", "MaPLeMTDA")
+        print(f"{log_prefix} pseudo-label weight: {self.lambda_pl}")
+        print(f"{log_prefix} pseudo-label threshold: {self.pl_threshold}")
+        print(f"{log_prefix} pseudo-label student threshold: {self.pl_student_threshold}")
         print(
-            "MaPLeMTDA pseudo-label low-conf only: "
+            f"{log_prefix} pseudo-label low-conf only: "
             f"{self.pl_use_student_low_conf_mask}"
         )
-        print(f"MaPLeMTDA zero-shot prompt template: {zs_template}")
+        print(f"{log_prefix} weak PL enabled: {self.weak_pl_enabled}")
+        print(f"{log_prefix} weak PL weight: {self.lambda_weak_pl}")
+        print(
+            f"{log_prefix} weak PL teacher thresholds: "
+            f"[{self.weak_pl_teacher_threshold}, {self.weak_pl_teacher_threshold_high})"
+        )
+        print(f"{log_prefix} weak PL student threshold: {self.weak_pl_student_threshold}")
+        print(f"{log_prefix} weak PL class fraction: {self.weak_pl_fraction}")
+        print(f"{log_prefix} zero-shot prompt template: {zs_template}")
 
     @staticmethod
     def _ensure_finite(name, tensor):
         if not torch.isfinite(tensor).all():
             raise FloatingPointError(f"Non-finite values detected in {name}")
+
+    def _init_weak_pl_config(self, maple_cfg):
+        weak_cfg = maple_cfg.WEAK_PL
+        self.weak_pl_enabled = bool(weak_cfg.ENABLED)
+        self.lambda_weak_pl = float(weak_cfg.LAMBDA)
+        self.weak_pl_teacher_threshold = float(weak_cfg.TEACHER_THRESHOLD)
+        self.weak_pl_teacher_threshold_high = float(
+            weak_cfg.TEACHER_THRESHOLD_HIGH
+        )
+        self.weak_pl_student_threshold = float(weak_cfg.STUDENT_THRESHOLD)
+        self.weak_pl_use_student_low_conf_mask = bool(
+            weak_cfg.USE_STUDENT_LOW_CONF_MASK
+        )
+        self.weak_pl_fraction = float(weak_cfg.FRACTION)
+        self.weak_pl_momentum = float(weak_cfg.MOMENTUM)
+        self.weak_pl_eps = float(weak_cfg.EPS)
+        self._weak_pl_domain_state = {}
+
+    @staticmethod
+    def _masked_mean(values, mask):
+        mask_float = mask.float()
+        denom = mask_float.sum()
+        if denom.item() <= 0:
+            return values.new_zeros(())
+        return (values * mask_float).sum() / denom.clamp_min(1.0)
 
     def forward(self, image, domain_name=None):
         del domain_name
@@ -290,6 +325,142 @@ class CustomMaPLeMTDA(nn.Module):
         }
         return loss, stats
 
+    @torch.no_grad()
+    def _update_weak_pl_state(self, domain_name, reference_probs):
+        device = reference_probs.device
+        num_classes = reference_probs.shape[-1]
+        reference_conf, reference_label = reference_probs.max(dim=-1)
+        entropy = -(
+            reference_probs * (reference_probs + self.weak_pl_eps).log()
+        ).sum(dim=-1)
+
+        count = torch.bincount(reference_label, minlength=num_classes).float()
+        count_dist = count / count.sum().clamp_min(1.0)
+        entropy_sum = torch.zeros(num_classes, device=device)
+        entropy_sum.scatter_add_(0, reference_label, entropy)
+        observed = count > 0
+        entropy_avg = torch.full(
+            (num_classes,),
+            float(entropy.mean().detach().item()),
+            device=device,
+            dtype=entropy.dtype,
+        )
+        entropy_avg[observed] = entropy_sum[observed] / count[observed]
+
+        if domain_name not in self._weak_pl_domain_state:
+            self._weak_pl_domain_state[domain_name] = {
+                "count": count_dist.detach(),
+                "entropy": entropy_avg.detach(),
+                "seen": observed.detach().clone(),
+            }
+        else:
+            state = self._weak_pl_domain_state[domain_name]
+            momentum = self.weak_pl_momentum
+            state["count"] = (
+                momentum * state["count"].to(device)
+                + (1.0 - momentum) * count_dist.detach()
+            )
+            old_entropy = state["entropy"].to(device)
+            new_entropy = old_entropy.clone()
+            new_entropy[observed] = (
+                momentum * old_entropy[observed]
+                + (1.0 - momentum) * entropy_avg[observed].detach()
+            )
+            state["entropy"] = new_entropy
+            state["seen"] = state["seen"].to(device) | observed
+
+        state = self._weak_pl_domain_state[domain_name]
+        count_ema = state["count"].to(device)
+        entropy_ema = state["entropy"].to(device)
+        seen = state["seen"].to(device)
+
+        count_order = torch.argsort(count_ema, descending=False)
+        entropy_order = torch.argsort(entropy_ema, descending=True)
+        rank_values = torch.arange(
+            num_classes, 0, -1, device=device, dtype=count_ema.dtype
+        )
+        count_rank = torch.empty_like(count_ema)
+        entropy_rank = torch.empty_like(entropy_ema)
+        count_rank[count_order] = rank_values
+        entropy_rank[entropy_order] = rank_values
+        weak_score = count_rank + entropy_rank
+        weak_score = torch.where(
+            seen,
+            weak_score,
+            torch.full_like(weak_score, -float("inf")),
+        )
+
+        topk = max(1, int(round(self.weak_pl_fraction * num_classes)))
+        topk = min(int(seen.float().sum().item()), topk)
+        weak_class_mask = torch.zeros(num_classes, device=device, dtype=torch.bool)
+        if topk > 0:
+            weak_indices = torch.topk(weak_score, k=topk, largest=True).indices
+            weak_class_mask[weak_indices] = True
+
+        weak_stats = {
+            "weak_class_count": weak_class_mask.float().sum(),
+            "weak_class_fraction": weak_class_mask.float().mean(),
+            "weak_class_count_ema": self._masked_mean(count_ema, weak_class_mask),
+            "weak_class_entropy_ema": self._masked_mean(
+                entropy_ema, weak_class_mask
+            ),
+            "all_class_entropy_ema": entropy_ema.mean(),
+            "all_class_count_ema": count_ema.mean(),
+        }
+        return weak_class_mask, weak_stats
+
+    def _weak_pseudo_label_loss(self, domain_name, student_logits, reference_logits):
+        reference_probs = F.softmax(reference_logits.float(), dim=-1)
+        reference_conf, reference_label = reference_probs.max(dim=-1)
+        student_probs = F.softmax(student_logits.detach().float(), dim=-1)
+        student_conf, student_label = student_probs.max(dim=-1)
+        weak_class_mask, weak_stats = self._update_weak_pl_state(
+            domain_name, reference_probs.detach()
+        )
+
+        weak_candidate_mask = weak_class_mask[reference_label]
+        mask = weak_candidate_mask
+        mask = mask & reference_conf.ge(self.weak_pl_teacher_threshold)
+        mask = mask & reference_conf.lt(self.weak_pl_teacher_threshold_high)
+        if self.weak_pl_use_student_low_conf_mask:
+            mask = mask & student_conf.lt(self.weak_pl_student_threshold)
+
+        mask_float = mask.float()
+        ce = F.cross_entropy(student_logits, reference_label, reduction="none")
+        loss = (ce * mask_float).sum() / mask_float.sum().clamp_min(1.0)
+        self._ensure_finite("maple_weak_pseudo_label_loss", loss)
+
+        stats = {
+            "coverage": mask_float.mean(),
+            "candidate_coverage": weak_candidate_mask.float().mean(),
+            "clip_conf": reference_conf.mean(),
+            "student_conf": student_conf.mean(),
+            "selected_clip_conf": self._masked_mean(reference_conf, mask),
+            "selected_student_conf": self._masked_mean(student_conf, mask),
+            "candidate_clip_conf": self._masked_mean(
+                reference_conf, weak_candidate_mask
+            ),
+            "candidate_student_conf": self._masked_mean(
+                student_conf, weak_candidate_mask
+            ),
+            "agreement": (student_label == reference_label).float().mean(),
+            "selected_agreement": self._masked_mean(
+                (student_label == reference_label).float(), mask
+            ),
+            "weight": reference_conf.new_tensor(self.lambda_weak_pl),
+            "teacher_threshold": reference_conf.new_tensor(
+                self.weak_pl_teacher_threshold
+            ),
+            "teacher_threshold_high": reference_conf.new_tensor(
+                self.weak_pl_teacher_threshold_high
+            ),
+            "student_threshold": reference_conf.new_tensor(
+                self.weak_pl_student_threshold
+            ),
+        }
+        stats.update(weak_stats)
+        return loss, stats
+
     def forward_train(self, image_s, label_s, image_u_dict):
         logits_s = self(image_s)
         loss_ce = F.cross_entropy(logits_s, label_s)
@@ -297,15 +468,27 @@ class CustomMaPLeMTDA(nn.Module):
 
         pl_by_domain = {}
         pl_stats_by_domain = {}
-        if self.lambda_pl > 0.0:
+        weak_pl_by_domain = {}
+        weak_pl_stats_by_domain = {}
+        use_clean_pl = self.lambda_pl > 0.0
+        use_weak_pl = self.weak_pl_enabled and self.lambda_weak_pl > 0.0
+        if use_clean_pl or use_weak_pl:
             for domain_name, image_u in image_u_dict.items():
                 target_logits = self(image_u)
                 reference_logits = self._compute_reference_logits(image_u)
-                pl_loss, pl_stats = self._pseudo_label_loss(
-                    target_logits, reference_logits
-                )
-                pl_by_domain[domain_name] = pl_loss
-                pl_stats_by_domain[domain_name] = pl_stats
+                if use_clean_pl:
+                    pl_loss, pl_stats = self._pseudo_label_loss(
+                        target_logits, reference_logits
+                    )
+                    pl_by_domain[domain_name] = pl_loss
+                    pl_stats_by_domain[domain_name] = pl_stats
+                if use_weak_pl:
+                    weak_pl_loss, weak_pl_stats = self._weak_pseudo_label_loss(
+                        domain_name, target_logits, reference_logits
+                    )
+                    weak_pl_by_domain[domain_name] = weak_pl_loss
+                    weak_pl_stats_by_domain[domain_name] = weak_pl_stats
+        if use_clean_pl:
             loss_pl = torch.stack(list(pl_by_domain.values())).mean()
             pl_coverage = torch.stack(
                 [stats["coverage"] for stats in pl_stats_by_domain.values()]
@@ -326,7 +509,83 @@ class CustomMaPLeMTDA(nn.Module):
             pl_student_conf = loss_ce.new_zeros(())
             clip_student_agreement = loss_ce.new_zeros(())
 
-        loss_total = loss_ce + self.lambda_pl * loss_pl
+        if use_weak_pl:
+            weak_loss_pl = torch.stack(list(weak_pl_by_domain.values())).mean()
+            weak_pl_coverage = torch.stack(
+                [stats["coverage"] for stats in weak_pl_stats_by_domain.values()]
+            ).mean()
+            weak_pl_candidate_coverage = torch.stack(
+                [
+                    stats["candidate_coverage"]
+                    for stats in weak_pl_stats_by_domain.values()
+                ]
+            ).mean()
+            weak_pl_clip_conf = torch.stack(
+                [
+                    stats["selected_clip_conf"]
+                    for stats in weak_pl_stats_by_domain.values()
+                ]
+            ).mean()
+            weak_pl_student_conf = torch.stack(
+                [
+                    stats["selected_student_conf"]
+                    for stats in weak_pl_stats_by_domain.values()
+                ]
+            ).mean()
+            weak_pl_candidate_clip_conf = torch.stack(
+                [
+                    stats["candidate_clip_conf"]
+                    for stats in weak_pl_stats_by_domain.values()
+                ]
+            ).mean()
+            weak_pl_candidate_student_conf = torch.stack(
+                [
+                    stats["candidate_student_conf"]
+                    for stats in weak_pl_stats_by_domain.values()
+                ]
+            ).mean()
+            weak_pl_selected_agreement = torch.stack(
+                [
+                    stats["selected_agreement"]
+                    for stats in weak_pl_stats_by_domain.values()
+                ]
+            ).mean()
+            weak_pl_class_count = torch.stack(
+                [
+                    stats["weak_class_count"]
+                    for stats in weak_pl_stats_by_domain.values()
+                ]
+            ).mean()
+            weak_pl_class_count_ema = torch.stack(
+                [
+                    stats["weak_class_count_ema"]
+                    for stats in weak_pl_stats_by_domain.values()
+                ]
+            ).mean()
+            weak_pl_class_entropy_ema = torch.stack(
+                [
+                    stats["weak_class_entropy_ema"]
+                    for stats in weak_pl_stats_by_domain.values()
+                ]
+            ).mean()
+        else:
+            weak_loss_pl = loss_ce.new_zeros(())
+            weak_pl_coverage = loss_ce.new_zeros(())
+            weak_pl_candidate_coverage = loss_ce.new_zeros(())
+            weak_pl_clip_conf = loss_ce.new_zeros(())
+            weak_pl_student_conf = loss_ce.new_zeros(())
+            weak_pl_candidate_clip_conf = loss_ce.new_zeros(())
+            weak_pl_candidate_student_conf = loss_ce.new_zeros(())
+            weak_pl_selected_agreement = loss_ce.new_zeros(())
+            weak_pl_class_count = loss_ce.new_zeros(())
+            weak_pl_class_count_ema = loss_ce.new_zeros(())
+            weak_pl_class_entropy_ema = loss_ce.new_zeros(())
+
+        loss_total = (
+            loss_ce
+            + self.lambda_pl * loss_pl
+            + self.lambda_weak_pl * weak_loss_pl
+        )
         self._ensure_finite("maple_loss_total", loss_total)
 
         if self.debug_print_once and not self._debug_printed:
@@ -339,6 +598,12 @@ class CustomMaPLeMTDA(nn.Module):
             print("loss_ce:", float(loss_ce.detach().item()))
             print("loss_pl:", float(loss_pl.detach().item()))
             print("pl_coverage:", float(pl_coverage.detach().item()))
+            print("weak_loss_pl:", float(weak_loss_pl.detach().item()))
+            print("weak_pl_coverage:", float(weak_pl_coverage.detach().item()))
+            print(
+                "weak_pl_class_count:",
+                float(weak_pl_class_count.detach().item()),
+            )
             print("loss_total:", float(loss_total.detach().item()))
             self._debug_printed = True
 
@@ -352,6 +617,47 @@ class CustomMaPLeMTDA(nn.Module):
             "pl_student_conf": pl_student_conf.detach(),
             "clip_student_agreement": clip_student_agreement.detach(),
         }
+        if use_weak_pl:
+            outputs.update(
+                {
+                    "weak_loss_pl": weak_loss_pl.detach(),
+                    "weighted_weak_loss_pl": (
+                        self.lambda_weak_pl * weak_loss_pl
+                    ).detach(),
+                    "weak_pl_coverage": weak_pl_coverage.detach(),
+                    "weak_pl_candidate_coverage": (
+                        weak_pl_candidate_coverage.detach()
+                    ),
+                    "weak_pl_clip_conf": weak_pl_clip_conf.detach(),
+                    "weak_pl_student_conf": weak_pl_student_conf.detach(),
+                    "weak_pl_candidate_clip_conf": (
+                        weak_pl_candidate_clip_conf.detach()
+                    ),
+                    "weak_pl_candidate_student_conf": (
+                        weak_pl_candidate_student_conf.detach()
+                    ),
+                    "weak_pl_selected_agreement": (
+                        weak_pl_selected_agreement.detach()
+                    ),
+                    "weak_pl_class_count": weak_pl_class_count.detach(),
+                    "weak_pl_class_count_ema": weak_pl_class_count_ema.detach(),
+                    "weak_pl_class_entropy_ema": (
+                        weak_pl_class_entropy_ema.detach()
+                    ),
+                    "weak_pl_weight": loss_ce.new_tensor(
+                        self.lambda_weak_pl
+                    ).detach(),
+                    "weak_pl_teacher_threshold": loss_ce.new_tensor(
+                        self.weak_pl_teacher_threshold
+                    ).detach(),
+                    "weak_pl_teacher_threshold_high": loss_ce.new_tensor(
+                        self.weak_pl_teacher_threshold_high
+                    ).detach(),
+                    "weak_pl_student_threshold": loss_ce.new_tensor(
+                        self.weak_pl_student_threshold
+                    ).detach(),
+                }
+            )
         for domain_name, pl_loss in pl_by_domain.items():
             outputs[f"loss_pl_{domain_name}"] = pl_loss.detach()
         for domain_name, stats in pl_stats_by_domain.items():
@@ -362,6 +668,39 @@ class CustomMaPLeMTDA(nn.Module):
             ].detach()
             outputs[f"clip_student_agreement_{domain_name}"] = stats[
                 "agreement"
+            ].detach()
+        for domain_name, weak_pl_loss in weak_pl_by_domain.items():
+            outputs[f"weak_loss_pl_{domain_name}"] = weak_pl_loss.detach()
+        for domain_name, stats in weak_pl_stats_by_domain.items():
+            outputs[f"weak_pl_coverage_{domain_name}"] = stats[
+                "coverage"
+            ].detach()
+            outputs[f"weak_pl_candidate_coverage_{domain_name}"] = stats[
+                "candidate_coverage"
+            ].detach()
+            outputs[f"weak_pl_clip_conf_{domain_name}"] = stats[
+                "selected_clip_conf"
+            ].detach()
+            outputs[f"weak_pl_student_conf_{domain_name}"] = stats[
+                "selected_student_conf"
+            ].detach()
+            outputs[f"weak_pl_candidate_clip_conf_{domain_name}"] = stats[
+                "candidate_clip_conf"
+            ].detach()
+            outputs[f"weak_pl_candidate_student_conf_{domain_name}"] = stats[
+                "candidate_student_conf"
+            ].detach()
+            outputs[f"weak_pl_selected_agreement_{domain_name}"] = stats[
+                "selected_agreement"
+            ].detach()
+            outputs[f"weak_pl_class_count_{domain_name}"] = stats[
+                "weak_class_count"
+            ].detach()
+            outputs[f"weak_pl_class_count_ema_{domain_name}"] = stats[
+                "weak_class_count_ema"
+            ].detach()
+            outputs[f"weak_pl_class_entropy_ema_{domain_name}"] = stats[
+                "weak_class_entropy_ema"
             ].detach()
         return outputs
 

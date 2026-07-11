@@ -48,5 +48,15 @@ TRAINER:
     PL_STUDENT_THRESHOLD: 0.7
     PL_USE_STUDENT_LOW_CONF_MASK: true
     ZS_PROMPT_TEMPLATE: "a photo of a {}."
+    WEAK_PL:
+      ENABLED: false
+      LAMBDA: 0.0
+      TEACHER_THRESHOLD: 0.6
+      TEACHER_THRESHOLD_HIGH: 0.7
+      STUDENT_THRESHOLD: 0.7
+      USE_STUDENT_LOW_CONF_MASK: true
+      FRACTION: 0.2
+      MOMENTUM: 0.9
+      EPS: 1e-6
     DEBUG:
       PRINT_ONCE: false

@@ -211,6 +211,7 @@ class CustomContinuousMaPLeMTDA(CustomMaPLeMTDA):
         self.pl_use_student_low_conf_mask = bool(
             maple_cfg.PL_USE_STUDENT_LOW_CONF_MASK
         )
+        self._init_weak_pl_config(maple_cfg)
         self.debug_print_once = bool(maple_cfg.DEBUG.PRINT_ONCE)
         self._debug_printed = False
 
@@ -231,6 +232,14 @@ class CustomContinuousMaPLeMTDA(CustomMaPLeMTDA):
             f"{self.log_prefix} pseudo-label low-conf only: "
             f"{self.pl_use_student_low_conf_mask}"
         )
+        print(f"{self.log_prefix} weak PL enabled: {self.weak_pl_enabled}")
+        print(f"{self.log_prefix} weak PL weight: {self.lambda_weak_pl}")
+        print(
+            f"{self.log_prefix} weak PL teacher thresholds: "
+            f"[{self.weak_pl_teacher_threshold}, {self.weak_pl_teacher_threshold_high})"
+        )
+        print(f"{self.log_prefix} weak PL student threshold: {self.weak_pl_student_threshold}")
+        print(f"{self.log_prefix} weak PL class fraction: {self.weak_pl_fraction}")
         print(f"{self.log_prefix} zero-shot prompt template: {zs_template}")
 
 
