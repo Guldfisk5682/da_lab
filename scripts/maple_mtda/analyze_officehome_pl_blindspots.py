@@ -2,9 +2,14 @@ import argparse
 import csv
 import json
 import math
+import sys
 from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import torch
 import torch.nn.functional as F
