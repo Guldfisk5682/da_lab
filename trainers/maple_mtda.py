@@ -11,6 +11,7 @@ from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
 from dassl.engine import TRAINER_REGISTRY
 from dassl.optim import build_lr_scheduler, build_optimizer
 
+from trainers.checkpoint_utils import load_checkpoint_compat
 from trainers.cocoop import load_clip_to_cpu as load_base_clip_to_cpu
 from trainers.mtda_base import MultiTargetTrainerXU
 
@@ -810,7 +811,7 @@ class MaPLeMTDA(MultiTargetTrainerXU):
         if not osp.exists(model_path):
             raise FileNotFoundError(f'Model not found at "{model_path}"')
 
-        checkpoint = torch.load(model_path, map_location="cpu")
+        checkpoint = load_checkpoint_compat(model_path)
         state_dict = checkpoint["state_dict"]
         for key in ["prompt_learner.token_prefix", "prompt_learner.token_suffix"]:
             state_dict.pop(key, None)

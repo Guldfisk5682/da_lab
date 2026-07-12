@@ -8,6 +8,7 @@ from clip import clip
 from dassl.engine import TRAINER_REGISTRY
 from dassl.optim import build_lr_scheduler, build_optimizer
 
+from trainers.checkpoint_utils import load_checkpoint_compat
 from trainers.maple_mtda import (
     CustomMaPLeMTDA,
     MaPLeMTDA,
@@ -466,7 +467,7 @@ class ContinuousMaPLeMTDA(MaPLeMTDA):
         if not osp.exists(model_path):
             raise FileNotFoundError(f'Model not found at "{model_path}"')
 
-        checkpoint = torch.load(model_path, map_location="cpu")
+        checkpoint = load_checkpoint_compat(model_path)
         state_dict = checkpoint["state_dict"]
         for key in ["prompt_learner.token_prefix", "prompt_learner.token_suffix"]:
             state_dict.pop(key, None)
@@ -534,7 +535,7 @@ class ContinuousSharedProjMaPLeMTDA(ContinuousMaPLeMTDA):
         if not osp.exists(model_path):
             raise FileNotFoundError(f'Model not found at "{model_path}"')
 
-        checkpoint = torch.load(model_path, map_location="cpu")
+        checkpoint = load_checkpoint_compat(model_path)
         state_dict = checkpoint["state_dict"]
         for key in ["prompt_learner.token_prefix", "prompt_learner.token_suffix"]:
             state_dict.pop(key, None)
