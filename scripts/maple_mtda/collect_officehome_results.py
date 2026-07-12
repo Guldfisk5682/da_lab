@@ -42,6 +42,16 @@ def parse_log(path):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", type=int, nargs="+", default=[1])
+    parser.add_argument(
+        "--method-tags",
+        nargs="+",
+        help="Collect only these exact method directory names",
+    )
+    parser.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="Compute a partial macro average instead of marking incomplete runs as NA",
+    )
     return parser.parse_args()
 
 
@@ -54,6 +64,16 @@ def output_paths(seeds):
         RESULTS_DIR / f"officehome_maple_mtda_{suffix}.csv",
         RESULTS_DIR / f"officehome_maple_mtda_{suffix}.md",
     )
+
+
+def summarize_accs(accs, allow_incomplete=False):
+    present = [acc for acc in accs if acc is not None]
+    complete = len(present) == len(accs)
+    if complete or (allow_incomplete and present):
+        macro = sum(present) / len(present)
+    else:
+        macro = None
+    return macro, complete, len(present)
 
 
 def main():
@@ -74,6 +94,16 @@ def main():
             )
         )
     ]
+    if args.method_tags:
+        requested = set(args.method_tags)
+        method_dirs = [path for path in method_dirs if path.name in requested]
+        found = {path.name for path in method_dirs}
+        missing = sorted(requested - found)
+        if missing:
+            raise FileNotFoundError(
+                "Requested method directories not found under "
+                f"{OUTPUT_ROOT}: {', '.join(missing)}"
+            )
     for method_dir in method_dirs:
         for seed in args.seeds:
             for source, targets in SOURCES.items():
@@ -83,8 +113,9 @@ def main():
                 )
                 values = parse_log(log_path)
                 accs = [values.get(target) for target in targets]
-                present = [acc for acc in accs if acc is not None]
-                macro = sum(present) / len(present) if present else None
+                macro, complete, num_present = summarize_accs(
+                    accs, allow_incomplete=args.allow_incomplete
+                )
                 rows.append(
                     {
                         "Method": method_dir.name,
@@ -94,6 +125,8 @@ def main():
                         "Target2": f"{targets[1]}:{accs[1]:.2f}" if accs[1] is not None else f"{targets[1]}:NA",
                         "Target3": f"{targets[2]}:{accs[2]:.2f}" if accs[2] is not None else f"{targets[2]}:NA",
                         "Macro Avg": f"{macro:.2f}" if macro is not None else "NA",
+                        "Targets Found": f"{num_present}/{len(targets)}",
+                        "Complete": "yes" if complete else "no",
                         "Log": str(log_path),
                     }
                 )
@@ -107,6 +140,8 @@ def main():
             "Target2",
             "Target3",
             "Macro Avg",
+            "Targets Found",
+            "Complete",
             "Log",
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -114,13 +149,14 @@ def main():
         writer.writerows(rows)
 
     lines = [
-        "| Method | Seed | Source | Target1 | Target2 | Target3 | Macro Avg |",
-        "| --- | ---: | --- | ---: | ---: | ---: | ---: |",
+        "| Method | Seed | Source | Target1 | Target2 | Target3 | Macro Avg | Targets Found | Complete |",
+        "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in rows:
         lines.append(
             f"| {row['Method']} | {row['Seed']} | {row['Source']} | {row['Target1']} | "
-            f"{row['Target2']} | {row['Target3']} | {row['Macro Avg']} |"
+            f"{row['Target2']} | {row['Target3']} | {row['Macro Avg']} | "
+            f"{row['Targets Found']} | {row['Complete']} |"
         )
     md_path.write_text("\n".join(lines) + "\n")
     print(f"Wrote {csv_path}")

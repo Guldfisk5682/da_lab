@@ -8,7 +8,7 @@ from clip import clip
 from dassl.engine import TRAINER_REGISTRY
 from dassl.optim import build_lr_scheduler, build_optimizer
 
-from trainers.checkpoint_utils import load_checkpoint_compat
+from trainers.checkpoint_utils import load_checkpoint_compat, load_state_dict_checked
 from trainers.maple_mtda import (
     CustomMaPLeMTDA,
     MaPLeMTDA,
@@ -487,7 +487,15 @@ class ContinuousMaPLeMTDA(MaPLeMTDA):
             state_dict.pop(key, None)
 
         print(f'Loading weights to ContinuousMaPLeMTDA from "{model_path}"')
-        self._models["ContinuousMaPLeMTDA"].load_state_dict(state_dict, strict=False)
+        load_state_dict_checked(
+            self._models["ContinuousMaPLeMTDA"],
+            state_dict,
+            allowed_missing=(
+                "prompt_learner.token_prefix",
+                "prompt_learner.token_suffix",
+            ),
+            context=f"ContinuousMaPLeMTDA checkpoint {model_path}",
+        )
 
 
 @TRAINER_REGISTRY.register()
@@ -556,7 +564,15 @@ class ContinuousSharedProjMaPLeMTDA(ContinuousMaPLeMTDA):
             state_dict.pop(key, None)
 
         print(f'Loading weights to {self.model_name} from "{model_path}"')
-        self._models[self.model_name].load_state_dict(state_dict, strict=False)
+        load_state_dict_checked(
+            self._models[self.model_name],
+            state_dict,
+            allowed_missing=(
+                "prompt_learner.token_prefix",
+                "prompt_learner.token_suffix",
+            ),
+            context=f"{self.model_name} checkpoint {model_path}",
+        )
 
 
 @TRAINER_REGISTRY.register()

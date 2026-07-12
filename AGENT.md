@@ -1,17 +1,28 @@
 # AGENT.md
 
-Last updated: 2026-07-10.
+Last updated: 2026-07-12.
 
-This file is the handoff note for future agents working on `da_lab`. Keep it
-short, current, and operational. Do not turn it back into a long historical
-prompt dump.
+This is the operational handoff document for future Agents working on `da_lab`.
+Keep it current. After each meaningful code change, experiment launch, result
+collection, or major research decision, update this file before handing off.
+Do not let it become a stale chat transcript.
 
-## Current Focus
+## Current Role Of This Document
+
+A new Agent should be able to read this file and answer five questions quickly:
+
+1. How do I access the server and run experiments?
+2. Which code paths matter for the current research line?
+3. What is the current strongest baseline?
+4. Which ideas have already failed or are low priority?
+5. Which logs/results must be preserved locally for later paper writing?
+
+## Current Branch And Theme
 
 Active branch:
 
 ```text
-clip-vpt-mtda
+maple-continuous-prompt-mtda
 ```
 
 Current research setting:
@@ -20,97 +31,14 @@ Current research setting:
 Dataset: Office-Home
 Protocol: source-available closed-set SS-MTDA
 Backbone: CLIP ViT-B/16
-Current strongest baseline: MaPLeMTDA + frozen-CLIP pseudo-label loss
+Main route: MaPLe-like multi-modal prompt tuning + frozen-CLIP pseudo labels
+Current extension: post-PL old-student self-distillation for weak/mid-confidence regions
 ```
 
-Most important finding so far:
+The earlier AD-CLIP-like/TSSP route is no longer the main line. Preserve it as
+context, but do not spend more compute there unless the user explicitly asks.
 
-```text
-Frozen zero-shot CLIP pseudo-labeling on target batches is the clearest positive
-signal. It improves both CLIPTSSPMTDA and MaPLeMTDA. MaPLeMTDA + PL currently
-beats CLIPTSSPMTDA + PL, so future model work should probably use a MaPLe-like
-multi-modal prompt backbone rather than continuing to over-tune pure TSSP.
-```
-
-Key seed1 Office-Home SS-MTDA numbers:
-
-```text
-CoCoOpMTDA baseline:             about 83.40
-MaPLeMTDA:                       about 83.67
-CLIPTSSPMTDA PairGap + SGD PL03: about 84.07
-MaPLeMTDA + PL03:                about 84.45
-```
-
-Current recommended main control:
-
-```text
-MaPLeMTDA + PL(lambda=0.3)
-```
-
-Current recommended comparison:
-
-```text
-CLIPTSSPMTDA PairGap + SGD PL(lambda=0.3)
-```
-
-## Golden Rules
-
-- Do not download datasets or model weights locally.
-- Do not run long training locally.
-- Real data and real training happen on the remote server.
-- Local work should be code edits, docs, scripts, dry-runs, and lightweight syntax checks.
-- Preserve original CoOp/CoCoOp trainers unless the user explicitly asks otherwise.
-- Keep new experiment outputs separated by method tags to avoid checkpoint/resume contamination.
-- Do not revive old failed routes unless the user explicitly asks for a targeted ablation.
-
-## Paths And Backups
-
-Local repo:
-
-```text
-/home/txc_king/dldic/da_lab
-```
-
-Remote repo:
-
-```text
-~/workspace/da_lab
-```
-
-Remote prepared Office-Home data:
-
-```text
-~/workspace/da_lab/data/office_home
-```
-
-Latest local result backups:
-
-```text
-/home/txc_king/dldic/da_lab/results/officehome_clip_tssp_seed1_2026-07-10.md
-/home/txc_king/dldic/da_lab/results/officehome_clip_tssp_seed1_2026-07-10.csv
-/home/txc_king/dldic/da_lab/results/officehome_clip_tssp_seed1_summary_2026-07-10.csv
-/home/txc_king/dldic/da_lab/results/officehome_maple_mtda_seed1_2026-07-10.md
-/home/txc_king/dldic/da_lab/results/officehome_maple_mtda_seed1_2026-07-10.csv
-```
-
-Latest remote generated results:
-
-```text
-~/workspace/da_lab/results/officehome_clip_tssp_seed1.md
-~/workspace/da_lab/results/officehome_clip_tssp_seed1.csv
-~/workspace/da_lab/results/officehome_clip_tssp_seed1_summary.csv
-~/workspace/da_lab/results/officehome_maple_mtda_seed1.md
-~/workspace/da_lab/results/officehome_maple_mtda_seed1.csv
-```
-
-Older recovered backups also exist under local `results/`, especially:
-
-```text
-officehome_key_results_recovered_2026-07-08.*
-officehome_maple_mtda_seed1_2026-07-08.*
-```
-
-## Remote Server Workflow
+## Server Access
 
 SSH:
 
@@ -118,280 +46,559 @@ SSH:
 ssh lab-server
 ```
 
-Remote environment:
+Remote repo:
 
 ```bash
 cd ~/workspace/da_lab
+```
+
+Remote conda environment:
+
+```bash
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate coop-da
 ```
 
-GPU/screen checks:
+Local repo:
+
+```bash
+cd ~/dldic/da_lab
+```
+
+Local validation environment:
+
+```bash
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate dlenv
+```
+
+Useful remote checks:
 
 ```bash
 nvidia-smi
+nvidia-smi --query-gpu=index,memory.used,memory.free,utilization.gpu --format=csv,noheader,nounits
 ~/miniconda3/bin/screen -list
+ps -ef | grep train.py | grep -v grep
 ```
 
-Notes:
+Important GPU note from 2026-07-12:
 
 ```text
-The server has two RTX 4090 GPUs.
-Prefer explicit CUDA_VISIBLE_DEVICES before training.
-Recent stable runs used CUDA_VISIBLE_DEVICES=1.
-Use PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for long jobs.
-screen is installed at ~/miniconda3/bin/screen.
+Both RTX 4090 cards can appear idle in nvidia-smi while PyTorch still reports
+"CUDA driver initialization failed". Always test actual torch CUDA allocation
+before launching a long run.
 ```
 
-If a screen-level log is empty, check the per-task Dassl log instead:
+Torch CUDA smoke test:
 
 ```bash
-tail -f ~/workspace/da_lab/output/officehome_mtda/maple_mtda_pl03/A2CPR/seed1/log.txt
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate coop-da
+CUDA_VISIBLE_DEVICES=0 python - <<'PY'
+import torch
+print(torch.cuda.is_available(), torch.cuda.device_count())
+if torch.cuda.is_available():
+    x = torch.ones(1, device='cuda')
+    print(float(x.item()), torch.cuda.get_device_name(0))
+PY
 ```
+
+Use `CUDA_VISIBLE_DEVICES=1` only if that same test passes for GPU1. If a GPU is
+idle in `nvidia-smi` but fails the torch test, do not start training there.
 
 ## Git Workflow
 
-Default workflow:
+Local remote named `temp` points to the Gitee mirror. The server pulls from its
+`origin`, also the Gitee mirror.
 
-```text
-1. Edit locally.
-2. Commit locally.
-3. Push to temp/Gitee.
-4. SSH to server.
-5. Pull on server.
-6. Run training in screen.
-```
-
-Local:
+Local edit/check/push:
 
 ```bash
-cd /home/txc_king/dldic/da_lab
+cd ~/dldic/da_lab
 git status --short
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate dlenv
+python -m py_compile train.py trainers/maple_mtda.py trainers/maple_continuous_mtda.py
 git add <files>
 git commit -m "<message>"
-git push temp clip-vpt-mtda
+git push temp maple-continuous-prompt-mtda
 ```
 
-Remote:
+Remote pull/check:
 
 ```bash
 ssh lab-server
 cd ~/workspace/da_lab
-git pull --ff-only origin clip-vpt-mtda
+git pull --ff-only origin maple-continuous-prompt-mtda
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate coop-da
+python -m py_compile train.py trainers/maple_mtda.py trainers/maple_continuous_mtda.py
 ```
 
-Important:
+Do not commit `.tmp/` or ad-hoc logs. Keep experiment outputs separated by
+`METHOD_TAG` to avoid checkpoint contamination.
+
+## Experiment Infrastructure Safeguards
+
+Local infra hardening added on 2026-07-12 (not yet committed at this handoff):
 
 ```text
-Remote origin currently points to the Gitee/temp mirror.
-Do not assume GitHub origin works from the server.
-Local .tmp/ contains temporary reference repos/materials and must not be committed.
+scripts/experiment_guard.py
+tests/test_experiment_infra.py
 ```
 
-## Active Training Entrypoints
-
-MaPLe baseline:
+The active ContinuousSharedProj launcher now writes
+`experiment_manifest.json` before training. Exact same-config restarts are
+allowed; changing config while reusing the output directory is rejected.
+Historical non-empty output directories do not have manifests. Resume one only
+after manually checking its config and setting:
 
 ```bash
-bash scripts/maple_mtda/run_officehome_all.sh
-python scripts/maple_mtda/collect_officehome_results.py
+export ALLOW_LEGACY_OUTPUT_DIR=1
 ```
 
-MaPLe + PL(lambda=0.3):
+Do not use that override for new experiments. Prefer a new `METHOD_TAG`.
+
+`train.py` appends invocation/git/CUDA metadata to `run_metadata.jsonl` and uses
+deterministic PyTorch/CuDNN settings for fixed-seed runs. The MaPLe checkpoint
+loaders now reject unknown missing/unexpected keys while allowing regenerated
+prompt prefix/suffix buffers.
+
+The MaPLe result collector now requires all three target accuracies before it
+reports a macro average. Incomplete runs are marked `Macro Avg=NA`,
+`Complete=no`. Use exact method filtering for paper tables:
 
 ```bash
-METHOD_TAG=maple_mtda_pl03 \
-EXTRA_OPTS="TRAINER.MAPLE_MTDA.LAMBDA_PL 0.3 TRAINER.MAPLE_MTDA.PL_THRESHOLD 0.7 TRAINER.MAPLE_MTDA.PL_STUDENT_THRESHOLD 0.7 TRAINER.MAPLE_MTDA.PL_USE_STUDENT_LOW_CONF_MASK True" \
-bash scripts/maple_mtda/run_officehome_all.sh
-
-python scripts/maple_mtda/collect_officehome_results.py
+python scripts/maple_mtda/collect_officehome_results.py \
+  --seeds 42 \
+  --method-tags maple_continuous_shared_mtda_pl03_seed42
 ```
 
-Example remote screen launch for MaPLe + PL:
+`--allow-incomplete` exists only for debugging and must not be used for paper
+numbers.
+
+## Training Entrypoints
+
+Current main training script:
 
 ```bash
-cd ~/workspace/da_lab
-mkdir -p logs
-LOG=logs/maple_mtda_pl03_$(date +%Y%m%d_%H%M%S).log
-CUDA_VISIBLE_DEVICES=1 ~/miniconda3/bin/screen -dmS maple_pl bash -lc \
-  "cd ~/workspace/da_lab && \
-   source ~/miniconda3/etc/profile.d/conda.sh && \
-   conda activate coop-da && \
-   export DATA=~/workspace/da_lab/data && \
-   export CUDA_VISIBLE_DEVICES=1 && \
-   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
-   METHOD_TAG=maple_mtda_pl03 \
-   EXTRA_OPTS=\"TRAINER.MAPLE_MTDA.LAMBDA_PL 0.3 TRAINER.MAPLE_MTDA.PL_THRESHOLD 0.7 TRAINER.MAPLE_MTDA.PL_STUDENT_THRESHOLD 0.7 TRAINER.MAPLE_MTDA.PL_USE_STUDENT_LOW_CONF_MASK True\" \
-   bash scripts/maple_mtda/run_officehome_all.sh && \
-   python scripts/maple_mtda/collect_officehome_results.py" \
-  > "${LOG}" 2>&1
+bash scripts/maple_continuous_shared_mtda/run_officehome_all.sh
 ```
 
-CLIPTSSPMTDA PairGap + PL/KL sweep:
+Single-source run:
 
 ```bash
-bash scripts/clip_tssp_mtda/run_pair_gap_pl_kl_sgd_sweep.sh
-python scripts/clip_tssp_mtda/collect_officehome_results.py --seed 1
+bash scripts/maple_continuous_shared_mtda/run_officehome_one.sh A 42
 ```
 
-Completed TSSP SGD sweep tags:
-
-```text
-clip_tssp_pair_gap_sgd_pl01
-clip_tssp_pair_gap_sgd_pl02
-clip_tssp_pair_gap_sgd_pl03
-clip_tssp_pair_gap_sgd_pl02_kl001
-clip_tssp_pair_gap_sgd_pl02_kl005
-clip_tssp_pair_gap_sgd_pl02_kl010
-```
-
-Output-root gotcha:
-
-```text
-MaPLe scripts use:    output/officehome_mtda/...
-CLIPTSSP scripts use: output/office_home_mtda/...
-```
-
-## What Worked
-
-Pseudo-label target regularization:
-
-```text
-Teacher: frozen zero-shot CLIP logits.
-Student: current model target logits.
-Loss: CE(student logits, teacher argmax), masked by teacher confidence and,
-optionally, low student confidence.
-Best current weight: lambda_pl=0.3.
-```
-
-PairGap TSSP:
-
-```text
-Extract all 12 frozen CLIP ViT hidden states.
-Per layer: concat token mean/std -> MLP -> text-space style token.
-Compress adjacent layer tokens into six source/target/gap groups.
-Prompt order around [source, gap, target] was better than no-gap variants.
-This helped, but did not beat MaPLe + PL.
-```
-
-MaPLeMTDA:
-
-```text
-MaPLe-style multi-modal prompt learning is a strong backbone in this SS-MTDA
-setting. Once target PL is added, it becomes the current best seed1 control.
-```
-
-## Failed Or Low-Value Routes
-
-Treat these as lessons, not active tasks:
-
-- Office-31 V0/V1 shallow hidden-state style fusion, final feature gate, legacy
-  GSPA hidden-state cross-style swap, and gate ablations did not produce a
-  durable direction. Keep them archived/history-only.
-- Pure CoCoOp text-side target style prompt modulation gave tiny and unstable
-  gains. Do not keep tuning style queues, beta scalars, or target-style text
-  prompt bias as the main story.
-- Persistent VCTX on CoCoOp/CLIP gave small gains, but insert-position, deeper
-  replacement prompts, large context counts, domain-text residuals, and ViaPT-like
-  instance prompts were not reliable enough to be the core method.
-- TSSP image tokens (`img12/img6/img4`) underperformed PairGap; do not revive
-  image-token injection unless there is a new reason.
-- Target entropy and class-balance information maximization did not become a
-  stable main objective.
-- KL to frozen CLIP logits was weaker than PL. It can stay as an ablation, but
-  should not be the default objective.
-- AdamW at tested settings did not beat the stronger SGD PL runs. Use optimizer
-  changes as controlled ablations only.
-
-## Direction For Future Agents
-
-If asked to improve the method, start from this hierarchy:
-
-```text
-1. Keep MaPLeMTDA + PL03 as the strongest current control.
-2. Compare any new idea against MaPLeMTDA + PL03 and CLIPTSSPMTDA PairGap + PL03.
-3. Prefer MaPLe-like multi-modal prompt backbones plus MTDA-native target/domain
-   modules.
-4. Keep frozen-CLIP pseudo-labeling as a first-class target-side signal.
-5. Avoid adding many tiny prompt variants without a clear hypothesis.
-```
-
-Potential next ideas:
-
-```text
-MaPLe + MTDA domain/style/gap tokens.
-MaPLe + stronger but still conservative pseudo-label scheduling.
-Multi-seed validation for MaPLe + PL03 and the best TSSP + PL03.
-DomainNet transfer only after Office-Home direction is stable.
-```
-
-## Legacy Files And Infrastructure
-
-Archived/legacy routes may still exist in the repo:
-
-```text
-archive/v0_v1_ablation/
-archive/legacy_gspa/
-trainers/style_prompt_mtda.py
-trainers/cocoop_vpt_mtda.py
-trainers/clip_tssp_mtda.py
-scripts/gspa_legacy_ablation/
-scripts/style_prompt_mtda/
-scripts/clip_tssp_mtda/
-```
-
-Do not delete them casually; they preserve reproducibility and old comparisons.
-But do not treat them as current research instructions.
-
-Useful infrastructure to preserve:
-
-```text
-datasets/office_home_mtda.py
-trainers/mtda_base.py
-scripts/datasets/download_officehome.sh
-scripts/datasets/verify_officehome_layout.sh
-scripts/maple_mtda/
-scripts/clip_tssp_mtda/collect_officehome_results.py
-scripts/clip_tssp_mtda/plot_tensorboard_curves.py
-```
-
-## Minimal Sanity Checks
-
-Local, if dependencies exist:
+Result collection:
 
 ```bash
-python train.py --help
+python scripts/maple_mtda/collect_officehome_results.py --seeds 42
 ```
 
-Remote:
+The script maps sources automatically:
+
+```text
+A -> C P R
+C -> A P R
+P -> A C R
+R -> A C P
+```
+
+Current strongest baseline command shape:
 
 ```bash
 cd ~/workspace/da_lab
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate coop-da
-python train.py --help
+export CUDA_VISIBLE_DEVICES=<usable_gpu>
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export METHOD_TAG=maple_continuous_shared_mtda_pl03_seed42
+export SEED=42
+export EXTRA_OPTS="TRAINER.MAPLE_MTDA.LAMBDA_PL 0.3 TRAINER.MAPLE_MTDA.PL_THRESHOLD 0.7 TRAINER.MAPLE_MTDA.PL_STUDENT_THRESHOLD 0.7 TRAINER.MAPLE_MTDA.PL_USE_STUDENT_LOW_CONF_MASK True"
+bash scripts/maple_continuous_shared_mtda/run_officehome_all.sh
+python scripts/maple_mtda/collect_officehome_results.py --seeds 42
 ```
 
-Before launching long jobs:
+Current post-PL self-distillation experiment command shape:
 
 ```bash
-git status --short
-nvidia-smi
-~/miniconda3/bin/screen -list
+cd ~/workspace/da_lab
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate coop-da
+export CUDA_VISIBLE_DEVICES=<usable_gpu>
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export METHOD_TAG=maple_continuous_shared_mtda_pl03_sdpost1_seed42
+export POST_INIT_METHOD_TAG=maple_continuous_shared_mtda_pl03_seed42
+export POST_INIT_LOAD_EPOCH=5
+export SEED=42
+export EXTRA_OPTS="OPTIM.MAX_EPOCH 1 OPTIM.LR 0.0005 OPTIM.WARMUP_EPOCH 0 TRAINER.MAPLE_MTDA.LAMBDA_PL 0.3 TRAINER.MAPLE_MTDA.SELF_DISTILL.ENABLED True TRAINER.MAPLE_MTDA.SELF_DISTILL.LAMBDA 0.03 TRAINER.MAPLE_MTDA.SELF_DISTILL.TEMPERATURE 2.0 TRAINER.MAPLE_MTDA.SELF_DISTILL.OLD_CONF_LOW 0.45 TRAINER.MAPLE_MTDA.SELF_DISTILL.OLD_CONF_HIGH 0.8"
+bash scripts/maple_continuous_shared_mtda/run_officehome_all.sh
+python scripts/maple_mtda/collect_officehome_results.py --seeds 42
 ```
 
-## Maintenance Rule
+`POST_INIT_METHOD_TAG` is handled by
+`scripts/maple_continuous_shared_mtda/run_officehome_one.sh`; it resolves the
+per-source checkpoint path automatically.
 
-When new experiments finish, update only these parts:
+## Current Core Code Map
+
+Main configs:
 
 ```text
-Current Focus
-Paths And Backups
-Active Training Entrypoints
-What Worked
-Failed Or Low-Value Routes
-Direction For Future Agents
+train.py
+configs/trainers/ContinuousSharedProjMaPLeMTDA/vit_b16.yaml
+configs/datasets/office_home_mtda.yaml
 ```
 
-Keep this file concise. If detailed experiment tables are needed, store them in
-`results/` or a dedicated `docs/` file and link the path here.
+Current trainer/model implementation:
+
+```text
+trainers/maple_mtda.py
+trainers/maple_continuous_mtda.py
+trainers/mtda_base.py
+trainers/checkpoint_utils.py
+```
+
+Important classes/functions:
+
+```text
+CustomMaPLeMTDA.forward_train
+CustomMaPLeMTDA._pseudo_label_loss
+CustomMaPLeMTDA._weak_pseudo_label_loss
+CustomMaPLeMTDA._self_distill_loss
+CustomMaPLeMTDA.build_self_distill_old_model
+MaPLeMTDA._maybe_load_post_init_model
+ContinuousSharedProjMaPLeMTDA.build_model
+ContinuousSharedProjPromptLearner
+```
+
+Experiment scripts:
+
+```text
+scripts/maple_continuous_shared_mtda/run_officehome_one.sh
+scripts/maple_continuous_shared_mtda/run_officehome_all.sh
+scripts/maple_mtda/collect_officehome_results.py
+scripts/maple_mtda/analyze_officehome_pl_blindspots.py
+```
+
+Reference code cloned for literature inspection:
+
+```text
+.tmp/research_code/DIFO-Plus
+```
+
+## Model And PL Design Snapshot
+
+MaPLe correction:
+
+```text
+Original MaPLe has trainable text prompt tokens for J layers and one projection
+per corresponding visual layer. The projected visual prompts are not an extra
+independent prompt parameter family; they couple the trainable text prompts to
+visual gradients through projection layers.
+```
+
+Current main model:
+
+```text
+ContinuousSharedProjMaPLeMTDA
+- Continuous text prompt tokens are propagated through the text tower.
+- Visual branch uses one shared deep visual projection reused across deep layers.
+- Trainable params: prompt_learner.ctx, shallow proj, shared deep projection.
+```
+
+Current clean PL:
+
+```text
+Teacher: frozen zero-shot CLIP with template "a photo of a {}."
+Mask: teacher_conf >= 0.7 and student_conf < 0.7
+Loss: hard CE to frozen CLIP argmax
+Weight: lambda_pl = 0.3
+```
+
+Current post-PL self-distillation idea:
+
+```text
+Stage 1: train strongest PL baseline normally.
+Stage 2: initialize from PL checkpoint, freeze an old-student snapshot, continue
+1 epoch with source CE + clean PL + small KL to old student on target samples
+whose old-student confidence lies in [0.45, 0.8).
+```
+
+This borrows only the old-policy / trust-region intuition from PPO. It is not an
+RL method and should be described as policy-style post-training self-distillation
+or old-student KL regularization.
+
+## Strongest Baselines And Results
+
+Current strongest baseline:
+
+```text
+ContinuousSharedProjMaPLeMTDA + PL03, seed42: 84.69
+```
+
+Per-source seed42:
+
+```text
+A2CPR: C 71.55 / P 91.19 / R 90.80 => 84.51
+C2APR: A 84.47 / P 91.89 / R 90.84 => 89.07
+P2ACR: A 84.26 / C 71.75 / R 91.05 => 82.35
+R2ACP: A 84.22 / C 72.10 / P 92.21 => 82.84
+Overall: 84.69
+```
+
+Seed1 same method:
+
+```text
+ContinuousSharedProjMaPLeMTDA + PL03, seed1: 84.60
+```
+
+Original MaPLe-like PL comparison, seed42:
+
+```text
+MaPLeMTDA + PL03 seed42: about 84.37
+ContinuousSharedProjMaPLeMTDA + PL03 seed42: 84.69
+```
+
+## Tried Failed Or Low-Priority Cases
+
+Continuous prompt without shared projection:
+
+```text
+Continuous prompt direction was plausible, but the strongest variant so far is
+continuous prompt + shared visual projection + PL, not every continuous variant.
+```
+
+Cosine PL weight decay:
+
+```text
+Tag: maple_continuous_shared_mtda_pl03_cosdecay_seed42
+Schedule: lambda_pl 0.3 -> 0.0 by cosine over 5 epochs
+Result: 84.06, worse than constant PL03 seed42 84.69 by -0.63
+Conclusion: plain PL weight decay is not suitable; late teacher signal remains useful.
+```
+
+Cosine decay per-source:
+
+```text
+A2CPR 83.68 vs 84.51 baseline
+C2APR 88.32 vs 89.07 baseline
+P2ACR 81.50 vs 82.35 baseline
+R2ACP 82.73 vs 82.84 baseline
+```
+
+Style-gap token / gap-conditioned PL:
+
+```text
+Tag: maple_gapctx_mtda_pl03_seed42
+Result did not beat the strongest baseline.
+Log inspection suggested the gap token mostly acted as noisy perturbation.
+Do not continue DIFO-style gap imitation unless the user explicitly reopens it.
+```
+
+RFC-style weak hard PL branch:
+
+```text
+Tag: maple_continuous_shared_mtda_pl03_weakrfc005_seed42
+A2CPR dropped to 84.17 vs 84.51 baseline, and later diagnostics explained why:
+the student is already stronger than frozen CLIP on many weak classes, so lower
+teacher thresholds can inject noise instead of useful supervision.
+```
+
+Full DIFO imitation:
+
+```text
+Deferred. DIFO changes too many modules and would move away from the current
+minimal MaPLe-like route.
+```
+
+Unfreezing CLIP:
+
+```text
+Rejected by user because it departs from parameter-efficient tuning.
+```
+
+## Weak-Class Diagnostics
+
+Diagnostic script:
+
+```bash
+python scripts/maple_mtda/analyze_officehome_pl_blindspots.py --seed 42 --method-tag maple_continuous_shared_mtda_pl03_seed42 --load-epoch 5
+```
+
+Remote diagnostic output:
+
+```text
+~/workspace/da_lab/results/pl_blindspots_seed42/
+~/workspace/da_lab/logs/pl_blindspots_seed42.log
+```
+
+Key aggregate findings:
+
+```text
+all classes:
+teacher_acc 0.8077
+student_acc 0.8364
+both_low_rate 0.1973
+teacher_true_prob 0.7215
+student_true_prob 0.7701
+
+rfc_teacher_weak classes:
+teacher_acc 0.5974
+student_acc 0.7137
+both_low_rate 0.3449
+teacher_true_prob 0.5004
+student_true_prob 0.6267
+
+both_low_top_fraction classes:
+teacher_acc 0.5932
+student_acc 0.6415
+both_low_rate 0.4374
+teacher_true_prob 0.4855
+student_true_prob 0.5375
+```
+
+Recurring weak classes include:
+
+```text
+toys, marker, folder, clipboards, mop, sink
+```
+
+Meaning of `true_prob`:
+
+```text
+Softmax probability assigned to the ground-truth class. It is diagnostic only
+because Office-Home labels are used during analysis. It must not be used in training.
+```
+
+Interpretation:
+
+```text
+Frozen CLIP is weak on these classes, but the trained student is often much
+stronger. This is why weak hard pseudo-labeling from CLIP is risky, and why the
+current direction shifted toward old-student soft self-distillation.
+```
+
+## Current In-Progress Experiment
+
+Code commit:
+
+```text
+76ea11d Add post-PL self-distillation branch
+```
+
+Current intended run:
+
+```text
+METHOD_TAG=maple_continuous_shared_mtda_pl03_sdpost1_seed42
+```
+
+Settings:
+
+```text
+Post-init from: maple_continuous_shared_mtda_pl03_seed42 epoch 5
+Post-training epochs: 1
+LR: 0.0005
+Clean PL: lambda 0.3 unchanged
+Self-distill KL: lambda 0.03, T=2.0, old_conf in [0.45, 0.8)
+```
+
+As of the latest read-only check on 2026-07-12, training has not completed. The
+previous run and GPU1 watcher have exited; there is no active self-distill
+process and no checkpoint/result for this method. Historical paths are:
+
+```text
+watcher log: ~/workspace/da_lab/logs/maple_continuous_shared_mtda_pl03_sdpost1_seed42_gpu1_watcher.log
+run log:     ~/workspace/da_lab/logs/maple_continuous_shared_mtda_pl03_sdpost1_seed42_run.log
+collect log: ~/workspace/da_lab/logs/maple_continuous_shared_mtda_pl03_sdpost1_seed42_collect.log
+```
+
+GPU1 passed a fresh real PyTorch allocation test after the watcher exited. Do
+not relaunch the self-distill run until the no-KL continuation control is given
+a separate method tag and scheduled alongside it.
+
+## Local `./tmp` / `.tmp` Archival Policy
+
+The repo currently has untracked `.tmp/` material. The user specifically wants
+important records to be preserved locally under a temporary archive area for
+handoff and paper-writing. Use this convention going forward:
+
+```text
+.tmp/agent_handoff/
+```
+
+Recommended subdirectories:
+
+```text
+.tmp/agent_handoff/results/
+.tmp/agent_handoff/logs/
+.tmp/agent_handoff/notes/
+.tmp/agent_handoff/papers/
+```
+
+Preserve these records locally when generated remotely:
+
+```text
+results/officehome_maple_mtda_seed42.csv
+results/officehome_maple_mtda_seed42.md
+results/pl_blindspots_seed42/*.csv
+logs/pl_blindspots_seed42.log
+logs/maple_continuous_shared_mtda_pl03_cosdecay_seed42_run.log
+logs/maple_continuous_shared_mtda_pl03_cosdecay_seed42_collect.log
+logs/maple_continuous_shared_mtda_pl03_sdpost1_seed42*_watcher.log
+logs/maple_continuous_shared_mtda_pl03_sdpost1_seed42_run.log
+logs/maple_continuous_shared_mtda_pl03_sdpost1_seed42_collect.log
+```
+
+Use `scp` or `rsync` from local WSL when needed, for example:
+
+```bash
+cd ~/dldic/da_lab
+mkdir -p .tmp/agent_handoff/results .tmp/agent_handoff/logs
+scp lab-server:~/workspace/da_lab/results/officehome_maple_mtda_seed42.* .tmp/agent_handoff/results/
+scp lab-server:~/workspace/da_lab/logs/pl_blindspots_seed42.log .tmp/agent_handoff/logs/
+rsync -av lab-server:~/workspace/da_lab/results/pl_blindspots_seed42/ .tmp/agent_handoff/results/pl_blindspots_seed42/
+```
+
+Do not commit `.tmp/agent_handoff/` unless the user explicitly asks. It is a
+local evidence archive, not source code.
+
+## Literature Context Already Discussed
+
+Useful reference directions:
+
+```text
+SHOT: source-free DA, pseudo-label/self-training issues, weak categories.
+S3DA: dynamic pseudo-label thresholding ideas; useful conceptually but not yet implemented.
+RFC: explicit weak-class identification; hard weak PL was not successful here.
+DIFO/DIFO-Plus: gap-region idea inspected, but direct structural imitation is too heavy for now.
+```
+
+Subagents previously helped with literature review. If the context window gets
+large again, use persistent subagents for paper reading and dirty analysis, but
+keep this file as the canonical compact handoff.
+
+## Update Rules For Future Agents
+
+Update this file when any of the following happens:
+
+```text
+- A new branch becomes active.
+- A new method tag is launched.
+- A run finishes and produces numbers.
+- A run fails for a nontrivial reason.
+- A result changes the research direction.
+- A new diagnostic script or important log is created.
+- A remote GPU/server issue affects experiment scheduling.
+```
+
+When updating, prefer compact factual notes:
+
+```text
+method tag, seed, command/config, result, conclusion, log/result path
+```
+
+Do not paste long terminal output. Record paths and the few numbers needed to
+reconstruct the decision.

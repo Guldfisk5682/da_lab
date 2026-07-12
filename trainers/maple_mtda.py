@@ -12,7 +12,7 @@ from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
 from dassl.engine import TRAINER_REGISTRY
 from dassl.optim import build_lr_scheduler, build_optimizer
 
-from trainers.checkpoint_utils import load_checkpoint_compat
+from trainers.checkpoint_utils import load_checkpoint_compat, load_state_dict_checked
 from trainers.cocoop import load_clip_to_cpu as load_base_clip_to_cpu
 from trainers.mtda_base import MultiTargetTrainerXU
 
@@ -1027,13 +1027,15 @@ class MaPLeMTDA(MultiTargetTrainerXU):
             state_dict.pop(key, None)
 
         print(f'Post-init loading {model_name} weights from "{model_path}"')
-        missing, unexpected = self._models[model_name].load_state_dict(
-            state_dict, strict=False
+        load_state_dict_checked(
+            self._models[model_name],
+            state_dict,
+            allowed_missing=(
+                "prompt_learner.token_prefix",
+                "prompt_learner.token_suffix",
+            ),
+            context=f"post-init checkpoint {model_path}",
         )
-        if missing:
-            print(f"Post-init missing keys: {missing}")
-        if unexpected:
-            print(f"Post-init unexpected keys: {unexpected}")
 
     def _maybe_build_self_distill_old_model(self):
         sd_cfg = self.cfg.TRAINER.MAPLE_MTDA.SELF_DISTILL
@@ -1150,4 +1152,12 @@ class MaPLeMTDA(MultiTargetTrainerXU):
             state_dict.pop(key, None)
 
         print(f'Loading weights to MaPLeMTDA from "{model_path}"')
-        self._models["MaPLeMTDA"].load_state_dict(state_dict, strict=False)
+        load_state_dict_checked(
+            self._models["MaPLeMTDA"],
+            state_dict,
+            allowed_missing=(
+                "prompt_learner.token_prefix",
+                "prompt_learner.token_suffix",
+            ),
+            context=f"MaPLeMTDA checkpoint {model_path}",
+        )

@@ -1,5 +1,10 @@
 import argparse
+import datetime
+import json
 import os
+import socket
+import subprocess
+import sys
 import torch
 
 from dassl.utils import setup_logger, set_random_seed, collect_env_info
@@ -36,6 +41,50 @@ import trainers.maple_continuous_mtda
 import trainers.maple_mtda
 import trainers.style_prompt_mtda
 import trainers.zsclip
+
+
+def _git_output(*args):
+    try:
+        return subprocess.run(
+            ["git", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "<unavailable>"
+
+
+def configure_reproducibility(seed):
+    if seed < 0:
+        return
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms(True, warn_only=True)
+
+
+def append_run_metadata(cfg):
+    metadata = {
+        "argv": sys.argv,
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>"),
+        "cwd": os.getcwd(),
+        "git_commit": _git_output("rev-parse", "HEAD"),
+        "git_status_short": _git_output("status", "--short"),
+        "hostname": socket.gethostname(),
+        "output_dir": cfg.OUTPUT_DIR,
+        "python": sys.version.split()[0],
+        "seed": cfg.SEED,
+        "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "torch": str(torch.__version__),
+        "trainer": cfg.TRAINER.NAME,
+    }
+    path = os.path.join(cfg.OUTPUT_DIR, "run_metadata.jsonl")
+    os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(metadata, sort_keys=True) + "\n")
+    print(f"Appended run metadata: {path}")
 
 
 def print_args(args, cfg):
@@ -268,10 +317,12 @@ def setup_cfg(args):
 
 def main(args):
     cfg = setup_cfg(args)
+    configure_reproducibility(cfg.SEED)
     if cfg.SEED >= 0:
         print("Setting fixed seed: {}".format(cfg.SEED))
         set_random_seed(cfg.SEED)
     setup_logger(cfg.OUTPUT_DIR)
+    append_run_metadata(cfg)
 
     if torch.cuda.is_available() and cfg.USE_CUDA:
         # Respect CUDA_VISIBLE_DEVICES by binding the current process
@@ -286,7 +337,8 @@ def main(args):
             f"torch.current_device()={torch.cuda.current_device()}, "
             f"torch.cuda.device_count()={torch.cuda.device_count()})"
         )
-        torch.backends.cudnn.benchmark = True
+        if cfg.SEED >= 0:
+            print("Deterministic CUDA execution enabled for fixed-seed runs")
 
     print_args(args, cfg)
     print("Collecting env info ...")

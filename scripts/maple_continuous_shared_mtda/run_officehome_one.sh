@@ -30,6 +30,7 @@ DRY_RUN="${DRY_RUN:-0}"
 EVAL_EVERY_EPOCH="${EVAL_EVERY_EPOCH:-False}"
 POST_INIT_METHOD_TAG="${POST_INIT_METHOD_TAG:-}"
 POST_INIT_LOAD_EPOCH="${POST_INIT_LOAD_EPOCH:-5}"
+ALLOW_LEGACY_OUTPUT_DIR="${ALLOW_LEGACY_OUTPUT_DIR:-0}"
 
 export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 
@@ -109,6 +110,25 @@ if [ -n "${EXTRA_OPTS}" ]; then
   CFG_OPTS+=("${EXTRA_ARRAY[@]}")
 fi
 
+GUARD_OPTS=(
+  "--output-dir" "${OUTPUT_DIR}"
+  "--method-tag" "${METHOD_TAG}"
+  "--source" "${SOURCE_CODE}"
+  "--targets" "${TARGET_CODES[@]}"
+  "--seed" "${SEED}"
+  "--trainer" "ContinuousSharedProjMaPLeMTDA"
+  "--trainer-config" "${CFG}"
+  "--dataset-config" "${DATASET_CONFIG}"
+  "--data" "${DATA}"
+  "--extra-opts" "${EXTRA_OPTS}"
+  "--effective-opts" "${CFG_OPTS[*]}"
+  "--post-init-method-tag" "${POST_INIT_METHOD_TAG}"
+  "--post-init-load-epoch" "${POST_INIT_LOAD_EPOCH}"
+)
+if [ "${ALLOW_LEGACY_OUTPUT_DIR}" = "1" ]; then
+  GUARD_OPTS+=("--allow-legacy")
+fi
+
 echo "ContinuousSharedProjMaPLeMTDA Office-Home SS-MTDA"
 echo "  repo: ${REPO_ROOT}"
 echo "  source: ${SOURCE_CODE} (${SOURCE_DOMAIN})"
@@ -129,4 +149,5 @@ if [ "${DRY_RUN}" = "1" ]; then
   exit 0
 fi
 
+python scripts/experiment_guard.py "${GUARD_OPTS[@]}"
 python train.py "${OPTS[@]}" "${CFG_OPTS[@]}"
