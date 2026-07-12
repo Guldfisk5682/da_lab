@@ -249,6 +249,7 @@ class CustomContinuousMaPLeMTDA(CustomMaPLeMTDA):
         print(f"{self.log_prefix} weak PL class fraction: {self.weak_pl_fraction}")
         print(f"{self.log_prefix} self-distill enabled: {self.self_distill_enabled}")
         print(f"{self.log_prefix} self-distill weight: {self.lambda_self_distill}")
+        print(f"{self.log_prefix} self-distill mode: {self.self_distill_mode}")
         print(f"{self.log_prefix} self-distill temperature: {self.self_distill_temperature}")
         print(
             f"{self.log_prefix} self-distill old confidence band: "

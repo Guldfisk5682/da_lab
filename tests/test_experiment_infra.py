@@ -7,6 +7,7 @@ import torch
 from scripts import experiment_guard
 from scripts.maple_mtda.collect_officehome_results import summarize_accs
 from trainers.checkpoint_utils import load_state_dict_checked
+from trainers.maple_mtda import build_self_distill_mask
 
 
 def guard_args(tmp_path, **overrides):
@@ -73,3 +74,17 @@ def test_checked_state_dict_accepts_declared_missing_key():
     )
     assert missing == ["bias"]
     assert unexpected == []
+
+
+def test_teacher_handoff_mask_uses_old_confident_clip_uncertain_region():
+    old_conf = torch.tensor([0.8, 0.8, 0.6, 0.9])
+    clip_conf = torch.tensor([0.6, 0.8, 0.5, 0.69])
+    mask = build_self_distill_mask(
+        "teacher_handoff",
+        old_conf,
+        old_conf_low=0.7,
+        old_conf_high=1.0,
+        reference_conf=clip_conf,
+        clip_conf_high=0.7,
+    )
+    assert mask.tolist() == [True, False, False, True]

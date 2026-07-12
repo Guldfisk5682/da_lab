@@ -63,9 +63,11 @@ TRAINER:
     SELF_DISTILL:
       ENABLED: false
       LAMBDA: 0.0
+      MODE: "confidence_band"
       TEMPERATURE: 2.0
       OLD_CONF_LOW: 0.45
       OLD_CONF_HIGH: 0.8
+      CLIP_CONF_HIGH: 0.7
       EPS: 1e-6
     POST_INIT:
       ENABLED: false

@@ -19,6 +19,28 @@ from trainers.mtda_base import MultiTargetTrainerXU
 _tokenizer = _Tokenizer()
 
 
+def build_self_distill_mask(
+    mode,
+    old_conf,
+    *,
+    old_conf_low,
+    old_conf_high,
+    reference_conf=None,
+    clip_conf_high=0.7,
+):
+    if mode == "all":
+        return torch.ones_like(old_conf, dtype=torch.bool)
+    if mode == "confidence_band":
+        return old_conf.ge(old_conf_low) & old_conf.lt(old_conf_high)
+    if mode == "teacher_handoff":
+        if reference_conf is None:
+            raise RuntimeError(
+                "teacher_handoff self-distillation requires frozen-CLIP confidence"
+            )
+        return old_conf.ge(old_conf_low) & reference_conf.lt(clip_conf_high)
+    raise ValueError(f"Unsupported MAPLE_MTDA.SELF_DISTILL.MODE={mode}")
+
+
 def _get_clones(module, n):
     return nn.ModuleList([copy.deepcopy(module) for _ in range(n)])
 
@@ -213,6 +235,7 @@ class CustomMaPLeMTDA(nn.Module):
         print(f"{log_prefix} weak PL class fraction: {self.weak_pl_fraction}")
         print(f"{log_prefix} self-distill enabled: {self.self_distill_enabled}")
         print(f"{log_prefix} self-distill weight: {self.lambda_self_distill}")
+        print(f"{log_prefix} self-distill mode: {self.self_distill_mode}")
         print(f"{log_prefix} self-distill temperature: {self.self_distill_temperature}")
         print(
             f"{log_prefix} self-distill old confidence band: "
@@ -257,9 +280,11 @@ class CustomMaPLeMTDA(nn.Module):
         sd_cfg = maple_cfg.SELF_DISTILL
         self.self_distill_enabled = bool(sd_cfg.ENABLED)
         self.lambda_self_distill = float(sd_cfg.LAMBDA)
+        self.self_distill_mode = str(sd_cfg.MODE).lower()
         self.self_distill_temperature = float(sd_cfg.TEMPERATURE)
         self.self_distill_old_conf_low = float(sd_cfg.OLD_CONF_LOW)
         self.self_distill_old_conf_high = float(sd_cfg.OLD_CONF_HIGH)
+        self.self_distill_clip_conf_high = float(sd_cfg.CLIP_CONF_HIGH)
         self.self_distill_eps = float(sd_cfg.EPS)
         self._self_distill_old_model_holder = [None]
 
@@ -514,7 +539,9 @@ class CustomMaPLeMTDA(nn.Module):
         stats.update(weak_stats)
         return loss, stats
 
-    def _self_distill_loss(self, domain_name, student_logits, image):
+    def _self_distill_loss(
+        self, domain_name, student_logits, image, reference_logits=None
+    ):
         del domain_name
         old_model = self._self_distill_old_model_holder[0]
         if old_model is None:
@@ -527,8 +554,20 @@ class CustomMaPLeMTDA(nn.Module):
 
         student_probs = F.softmax(student_logits.detach().float(), dim=-1)
         student_conf, student_label = student_probs.max(dim=-1)
-        mask = old_conf.ge(self.self_distill_old_conf_low)
-        mask = mask & old_conf.lt(self.self_distill_old_conf_high)
+        reference_conf = old_conf.new_zeros(old_conf.shape)
+        reference_label = old_label.clone()
+        if reference_logits is not None:
+            reference_probs = F.softmax(reference_logits.float(), dim=-1)
+            reference_conf, reference_label = reference_probs.max(dim=-1)
+
+        mask = build_self_distill_mask(
+            self.self_distill_mode,
+            old_conf,
+            old_conf_low=self.self_distill_old_conf_low,
+            old_conf_high=self.self_distill_old_conf_high,
+            reference_conf=reference_conf if reference_logits is not None else None,
+            clip_conf_high=self.self_distill_clip_conf_high,
+        )
         mask_float = mask.float()
 
         temperature = max(self.self_distill_temperature, self.self_distill_eps)
@@ -550,6 +589,12 @@ class CustomMaPLeMTDA(nn.Module):
             "old_conf": old_conf.mean(),
             "student_conf": student_conf.mean(),
             "selected_old_conf": self._masked_mean(old_conf, mask),
+            "clip_conf": reference_conf.mean(),
+            "selected_clip_conf": self._masked_mean(reference_conf, mask),
+            "old_clip_agreement": (old_label == reference_label).float().mean(),
+            "selected_old_clip_agreement": self._masked_mean(
+                (old_label == reference_label).float(), mask
+            ),
             "selected_student_conf": self._masked_mean(student_conf, mask),
             "kl": kl_per_sample.mean(),
             "selected_kl": self._masked_mean(kl_per_sample, mask),
@@ -587,10 +632,14 @@ class CustomMaPLeMTDA(nn.Module):
         use_self_distill = (
             self.self_distill_enabled and self.lambda_self_distill > 0.0
         )
+        handoff_needs_reference = (
+            use_self_distill and self.self_distill_mode == "teacher_handoff"
+        )
         if use_clean_pl or use_weak_pl or use_self_distill:
             for domain_name, image_u in image_u_dict.items():
                 target_logits = self(image_u)
-                if use_clean_pl or use_weak_pl:
+                reference_logits = None
+                if use_clean_pl or use_weak_pl or handoff_needs_reference:
                     reference_logits = self._compute_reference_logits(image_u)
                     if use_clean_pl:
                         pl_loss, pl_stats = self._pseudo_label_loss(
@@ -606,7 +655,10 @@ class CustomMaPLeMTDA(nn.Module):
                         weak_pl_stats_by_domain[domain_name] = weak_pl_stats
                 if use_self_distill:
                     sd_loss, sd_stats = self._self_distill_loss(
-                        domain_name, target_logits, image_u
+                        domain_name,
+                        target_logits,
+                        image_u,
+                        reference_logits=reference_logits,
                     )
                     self_distill_by_domain[domain_name] = sd_loss
                     self_distill_stats_by_domain[domain_name] = sd_stats
@@ -732,6 +784,18 @@ class CustomMaPLeMTDA(nn.Module):
                     for stats in self_distill_stats_by_domain.values()
                 ]
             ).mean()
+            self_distill_selected_clip_conf = torch.stack(
+                [
+                    stats["selected_clip_conf"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
+            self_distill_selected_old_clip_agreement = torch.stack(
+                [
+                    stats["selected_old_clip_agreement"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
             self_distill_selected_student_conf = torch.stack(
                 [
                     stats["selected_student_conf"]
@@ -777,6 +841,8 @@ class CustomMaPLeMTDA(nn.Module):
             self_distill_old_conf = loss_ce.new_zeros(())
             self_distill_student_conf = loss_ce.new_zeros(())
             self_distill_selected_old_conf = loss_ce.new_zeros(())
+            self_distill_selected_clip_conf = loss_ce.new_zeros(())
+            self_distill_selected_old_clip_agreement = loss_ce.new_zeros(())
             self_distill_selected_student_conf = loss_ce.new_zeros(())
             self_distill_kl = loss_ce.new_zeros(())
             self_distill_selected_kl = loss_ce.new_zeros(())
@@ -842,6 +908,12 @@ class CustomMaPLeMTDA(nn.Module):
                     ),
                     "self_distill_selected_old_conf": (
                         self_distill_selected_old_conf.detach()
+                    ),
+                    "self_distill_selected_clip_conf": (
+                        self_distill_selected_clip_conf.detach()
+                    ),
+                    "self_distill_selected_old_clip_agreement": (
+                        self_distill_selected_old_clip_agreement.detach()
                     ),
                     "self_distill_selected_student_conf": (
                         self_distill_selected_student_conf.detach()
@@ -937,6 +1009,12 @@ class CustomMaPLeMTDA(nn.Module):
             outputs[f"self_distill_selected_old_conf_{domain_name}"] = stats[
                 "selected_old_conf"
             ].detach()
+            outputs[f"self_distill_selected_clip_conf_{domain_name}"] = stats[
+                "selected_clip_conf"
+            ].detach()
+            outputs[f"self_distill_selected_old_clip_agreement_{domain_name}"] = stats[
+                "selected_old_clip_agreement"
+            ].detach()
             outputs[f"self_distill_selected_student_conf_{domain_name}"] = stats[
                 "selected_student_conf"
             ].detach()
@@ -999,6 +1077,12 @@ class MaPLeMTDA(MultiTargetTrainerXU):
         assert maple_cfg.SELF_DISTILL.OLD_CONF_LOW <= maple_cfg.SELF_DISTILL.OLD_CONF_HIGH
         assert maple_cfg.SELF_DISTILL.LAMBDA >= 0.0
         assert maple_cfg.SELF_DISTILL.TEMPERATURE > 0.0
+        assert maple_cfg.SELF_DISTILL.MODE in [
+            "all",
+            "confidence_band",
+            "teacher_handoff",
+        ]
+        assert 0.0 <= maple_cfg.SELF_DISTILL.CLIP_CONF_HIGH <= 1.0
         assert "{}" in maple_cfg.ZS_PROMPT_TEMPLATE
 
     def _registered_model_name(self):

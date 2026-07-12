@@ -519,6 +519,29 @@ GPU1 passed a fresh real PyTorch allocation test after the watcher exited. Do
 not relaunch the self-distill run until the no-KL continuation control is given
 a separate method tag and scheduled alongside it.
 
+### Minimal teacher-handoff pilot approved on 2026-07-12
+
+The first causal pilot uses only `A2CPR`, seed42, initialized from the PL03
+epoch-5 checkpoint. All groups continue for one epoch with LR `5e-4`, no warmup,
+and clean PL unchanged at `0.3`:
+
+```text
+maple_cshared_pl03_post1_nokl_seed42
+maple_cshared_pl03_post1_sdall003_seed42
+maple_cshared_pl03_post1_sdhandoff003_seed42
+```
+
+The handoff mask is intentionally minimal and complementary to clean CLIP PL:
+
+```text
+old_student_conf >= 0.7 and frozen_CLIP_conf < 0.7
+```
+
+The handoff branch uses old-student soft KL with `lambda=0.03`, `T=2`. The
+`sdall` control applies the same KL to all target samples. Compare handoff first
+against the exact no-KL continuation, then against all-sample KD. Do not tune
+thresholds from target labels in this pilot.
+
 ## Local `./tmp` / `.tmp` Archival Policy
 
 The repo currently has untracked `.tmp/` material. The user specifically wants
