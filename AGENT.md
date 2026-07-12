@@ -629,6 +629,35 @@ local evidence archive, not source code.
 
 ## Literature Context Already Discussed
 
+Literature freeze decision on 2026-07-12:
+
+```text
+Pause new training experiments after the negative post-stage KD pilot.
+Complete human reading and a route brainstorm before implementing another method.
+Generic second-stage KD, teacher replacement, dual-teacher filtering, and micro
+prompt variants are crowded; do not resume them through hyperparameter sweeps.
+```
+
+The broad review cache is local and untracked:
+
+```text
+.tmp/literature_review/README.md
+.tmp/literature_review/literature_matrix.md
+.tmp/literature_review/opportunity_report.md
+.tmp/literature_review/source_manifest.md
+.tmp/literature_review/paper_notes/
+```
+
+Current literature-derived opportunity, pending human review:
+
+```text
+Per-(target,class), directional and conflict-aware cross-target reliability
+transfer with abstention/negative-transfer control, built on a compact shared
+prompt backbone. Strong collisions to distinguish from: U3CF global pooled
+prototypes, D-CGCT domain curriculum/graph co-teaching, CRPL source-prompt
+aggregation/OT, DUET agreement filtering, and COSMo image-conditioned bias.
+```
+
 Useful reference directions:
 
 ```text
