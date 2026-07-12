@@ -542,6 +542,18 @@ The handoff branch uses old-student soft KL with `lambda=0.03`, `T=2`. The
 against the exact no-KL continuation, then against all-sample KD. Do not tune
 thresholds from target labels in this pilot.
 
+Launch status:
+
+```text
+Started: 2026-07-12 21:32 CST
+Remote commit: f0cabc9
+GPU: CUDA_VISIBLE_DEVICES=1 (real allocation smoke test passed)
+Screen: sd_handoff_pilot
+Runner log: logs/maple_cshared_pl03_post1_handoff_pilot_seed42_runner.log
+Order: no-KL -> all-sample KD -> teacher-handoff KD
+Initial ETA: 2026-07-12 21:50-22:00 CST
+```
+
 ## Local `./tmp` / `.tmp` Archival Policy
 
 The repo currently has untracked `.tmp/` material. The user specifically wants
