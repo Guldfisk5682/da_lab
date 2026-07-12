@@ -554,6 +554,33 @@ Order: no-KL -> all-sample KD -> teacher-handoff KD
 Initial ETA: 2026-07-12 21:50-22:00 CST
 ```
 
+Pilot result (completed on 2026-07-12):
+
+```text
+Stage-1 PL03 checkpoint: C 71.55 / P 91.19 / R 90.80 => 84.51
+No-KL continuation:      C 70.93 / P 90.70 / R 90.75 => 84.13
+All-sample KD, 0.03:     C 70.97 / P 90.70 / R 90.77 => 84.15
+Teacher-handoff KD:      C 71.00 / P 90.67 / R 90.80 => 84.16
+```
+
+Handoff minus no-KL is only `+0.03`; handoff minus all-sample KD is `+0.01`;
+handoff remains `-0.36` below the stage-1 checkpoint. Average handoff coverage
+reported during training was about `10.5%`, and its weighted KD loss was only
+about `1e-4`, versus clean weighted PL around `2.5e-2`. Conclusion: continuing
+training at the current settings is harmful, while KD provides only a tiny
+anti-drift signal. Do not expand this exact setting to all four sources.
+
+Important metric caveat: selected-confidence/agreement meters average per-batch
+zeros when a batch selects no samples, so their printed running averages are
+biased downward. Coverage and final accuracies are valid. Fix the selected
+statistics to use selected-count-weighted accumulation before relying on them.
+
+Local archived logs:
+
+```text
+.tmp/agent_handoff/logs/self_distill_pilot/
+```
+
 ## Local `./tmp` / `.tmp` Archival Policy
 
 The repo currently has untracked `.tmp/` material. The user specifically wants
