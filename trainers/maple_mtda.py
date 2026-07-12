@@ -179,6 +179,7 @@ class CustomMaPLeMTDA(nn.Module):
             maple_cfg.PL_USE_STUDENT_LOW_CONF_MASK
         )
         self._init_weak_pl_config(maple_cfg)
+        self._init_self_distill_config(maple_cfg)
         self.debug_print_once = bool(maple_cfg.DEBUG.PRINT_ONCE)
         self._debug_printed = False
 
@@ -210,6 +211,13 @@ class CustomMaPLeMTDA(nn.Module):
         )
         print(f"{log_prefix} weak PL student threshold: {self.weak_pl_student_threshold}")
         print(f"{log_prefix} weak PL class fraction: {self.weak_pl_fraction}")
+        print(f"{log_prefix} self-distill enabled: {self.self_distill_enabled}")
+        print(f"{log_prefix} self-distill weight: {self.lambda_self_distill}")
+        print(f"{log_prefix} self-distill temperature: {self.self_distill_temperature}")
+        print(
+            f"{log_prefix} self-distill old confidence band: "
+            f"[{self.self_distill_old_conf_low}, {self.self_distill_old_conf_high})"
+        )
         print(f"{log_prefix} zero-shot prompt template: {zs_template}")
 
     def set_training_progress(self, progress):
@@ -244,6 +252,30 @@ class CustomMaPLeMTDA(nn.Module):
         self.weak_pl_momentum = float(weak_cfg.MOMENTUM)
         self.weak_pl_eps = float(weak_cfg.EPS)
         self._weak_pl_domain_state = {}
+
+    def _init_self_distill_config(self, maple_cfg):
+        sd_cfg = maple_cfg.SELF_DISTILL
+        self.self_distill_enabled = bool(sd_cfg.ENABLED)
+        self.lambda_self_distill = float(sd_cfg.LAMBDA)
+        self.self_distill_temperature = float(sd_cfg.TEMPERATURE)
+        self.self_distill_old_conf_low = float(sd_cfg.OLD_CONF_LOW)
+        self.self_distill_old_conf_high = float(sd_cfg.OLD_CONF_HIGH)
+        self.self_distill_eps = float(sd_cfg.EPS)
+        self._self_distill_old_model_holder = [None]
+
+    def build_self_distill_old_model(self):
+        old_existing = self._self_distill_old_model_holder[0]
+        self._self_distill_old_model_holder[0] = None
+        old_model = copy.deepcopy(self)
+        self._self_distill_old_model_holder[0] = old_existing
+        old_model.self_distill_enabled = False
+        old_model.lambda_self_distill = 0.0
+        old_model._self_distill_old_model_holder[0] = None
+        old_model.to(next(self.parameters()).device)
+        old_model.eval()
+        for param in old_model.parameters():
+            param.requires_grad_(False)
+        self._self_distill_old_model_holder[0] = old_model
 
     @staticmethod
     def _masked_mean(values, mask):
@@ -482,6 +514,62 @@ class CustomMaPLeMTDA(nn.Module):
         stats.update(weak_stats)
         return loss, stats
 
+    def _self_distill_loss(self, domain_name, student_logits, image):
+        del domain_name
+        old_model = self._self_distill_old_model_holder[0]
+        if old_model is None:
+            raise RuntimeError("SELF_DISTILL is enabled but old student is not built")
+
+        with torch.no_grad():
+            old_logits = old_model(image)
+            old_probs = F.softmax(old_logits.float(), dim=-1)
+            old_conf, old_label = old_probs.max(dim=-1)
+
+        student_probs = F.softmax(student_logits.detach().float(), dim=-1)
+        student_conf, student_label = student_probs.max(dim=-1)
+        mask = old_conf.ge(self.self_distill_old_conf_low)
+        mask = mask & old_conf.lt(self.self_distill_old_conf_high)
+        mask_float = mask.float()
+
+        temperature = max(self.self_distill_temperature, self.self_distill_eps)
+        old_soft = F.softmax(old_logits.float() / temperature, dim=-1)
+        student_log_soft = F.log_softmax(student_logits.float() / temperature, dim=-1)
+        kl_per_sample = (
+            F.kl_div(student_log_soft, old_soft, reduction="none").sum(dim=-1)
+            * temperature
+            * temperature
+        )
+        loss = (kl_per_sample * mask_float).sum() / mask_float.sum().clamp_min(1.0)
+        self._ensure_finite("maple_self_distill_loss", loss)
+
+        old_entropy = -(old_probs * (old_probs + self.self_distill_eps).log()).sum(
+            dim=-1
+        )
+        stats = {
+            "coverage": mask_float.mean(),
+            "old_conf": old_conf.mean(),
+            "student_conf": student_conf.mean(),
+            "selected_old_conf": self._masked_mean(old_conf, mask),
+            "selected_student_conf": self._masked_mean(student_conf, mask),
+            "kl": kl_per_sample.mean(),
+            "selected_kl": self._masked_mean(kl_per_sample, mask),
+            "old_entropy": old_entropy.mean(),
+            "selected_old_entropy": self._masked_mean(old_entropy, mask),
+            "agreement": (student_label == old_label).float().mean(),
+            "selected_agreement": self._masked_mean(
+                (student_label == old_label).float(), mask
+            ),
+            "weight": student_logits.new_tensor(self.lambda_self_distill),
+            "temperature": student_logits.new_tensor(self.self_distill_temperature),
+            "old_conf_low": student_logits.new_tensor(
+                self.self_distill_old_conf_low
+            ),
+            "old_conf_high": student_logits.new_tensor(
+                self.self_distill_old_conf_high
+            ),
+        }
+        return loss, stats
+
     def forward_train(self, image_s, label_s, image_u_dict):
         logits_s = self(image_s)
         loss_ce = F.cross_entropy(logits_s, label_s)
@@ -491,25 +579,38 @@ class CustomMaPLeMTDA(nn.Module):
         pl_stats_by_domain = {}
         weak_pl_by_domain = {}
         weak_pl_stats_by_domain = {}
+        self_distill_by_domain = {}
+        self_distill_stats_by_domain = {}
         lambda_pl_current = self.current_lambda_pl()
         use_clean_pl = self.lambda_pl > 0.0
         use_weak_pl = self.weak_pl_enabled and self.lambda_weak_pl > 0.0
-        if use_clean_pl or use_weak_pl:
+        use_self_distill = (
+            self.self_distill_enabled and self.lambda_self_distill > 0.0
+        )
+        if use_clean_pl or use_weak_pl or use_self_distill:
             for domain_name, image_u in image_u_dict.items():
                 target_logits = self(image_u)
-                reference_logits = self._compute_reference_logits(image_u)
-                if use_clean_pl:
-                    pl_loss, pl_stats = self._pseudo_label_loss(
-                        target_logits, reference_logits
+                if use_clean_pl or use_weak_pl:
+                    reference_logits = self._compute_reference_logits(image_u)
+                    if use_clean_pl:
+                        pl_loss, pl_stats = self._pseudo_label_loss(
+                            target_logits, reference_logits
+                        )
+                        pl_by_domain[domain_name] = pl_loss
+                        pl_stats_by_domain[domain_name] = pl_stats
+                    if use_weak_pl:
+                        weak_pl_loss, weak_pl_stats = self._weak_pseudo_label_loss(
+                            domain_name, target_logits, reference_logits
+                        )
+                        weak_pl_by_domain[domain_name] = weak_pl_loss
+                        weak_pl_stats_by_domain[domain_name] = weak_pl_stats
+                if use_self_distill:
+                    sd_loss, sd_stats = self._self_distill_loss(
+                        domain_name, target_logits, image_u
                     )
-                    pl_by_domain[domain_name] = pl_loss
-                    pl_stats_by_domain[domain_name] = pl_stats
-                if use_weak_pl:
-                    weak_pl_loss, weak_pl_stats = self._weak_pseudo_label_loss(
-                        domain_name, target_logits, reference_logits
-                    )
-                    weak_pl_by_domain[domain_name] = weak_pl_loss
-                    weak_pl_stats_by_domain[domain_name] = weak_pl_stats
+                    self_distill_by_domain[domain_name] = sd_loss
+                    self_distill_stats_by_domain[domain_name] = sd_stats
+
         if use_clean_pl:
             loss_pl = torch.stack(list(pl_by_domain.values())).mean()
             pl_coverage = torch.stack(
@@ -603,10 +704,92 @@ class CustomMaPLeMTDA(nn.Module):
             weak_pl_class_count_ema = loss_ce.new_zeros(())
             weak_pl_class_entropy_ema = loss_ce.new_zeros(())
 
+        if use_self_distill:
+            loss_self_distill = torch.stack(
+                list(self_distill_by_domain.values())
+            ).mean()
+            self_distill_coverage = torch.stack(
+                [
+                    stats["coverage"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
+            self_distill_old_conf = torch.stack(
+                [
+                    stats["old_conf"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
+            self_distill_student_conf = torch.stack(
+                [
+                    stats["student_conf"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
+            self_distill_selected_old_conf = torch.stack(
+                [
+                    stats["selected_old_conf"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
+            self_distill_selected_student_conf = torch.stack(
+                [
+                    stats["selected_student_conf"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
+            self_distill_kl = torch.stack(
+                [stats["kl"] for stats in self_distill_stats_by_domain.values()]
+            ).mean()
+            self_distill_selected_kl = torch.stack(
+                [
+                    stats["selected_kl"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
+            self_distill_old_entropy = torch.stack(
+                [
+                    stats["old_entropy"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
+            self_distill_selected_old_entropy = torch.stack(
+                [
+                    stats["selected_old_entropy"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
+            self_distill_agreement = torch.stack(
+                [
+                    stats["agreement"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
+            self_distill_selected_agreement = torch.stack(
+                [
+                    stats["selected_agreement"]
+                    for stats in self_distill_stats_by_domain.values()
+                ]
+            ).mean()
+        else:
+            loss_self_distill = loss_ce.new_zeros(())
+            self_distill_coverage = loss_ce.new_zeros(())
+            self_distill_old_conf = loss_ce.new_zeros(())
+            self_distill_student_conf = loss_ce.new_zeros(())
+            self_distill_selected_old_conf = loss_ce.new_zeros(())
+            self_distill_selected_student_conf = loss_ce.new_zeros(())
+            self_distill_kl = loss_ce.new_zeros(())
+            self_distill_selected_kl = loss_ce.new_zeros(())
+            self_distill_old_entropy = loss_ce.new_zeros(())
+            self_distill_selected_old_entropy = loss_ce.new_zeros(())
+            self_distill_agreement = loss_ce.new_zeros(())
+            self_distill_selected_agreement = loss_ce.new_zeros(())
+
         loss_total = (
             loss_ce
             + lambda_pl_current * loss_pl
             + self.lambda_weak_pl * weak_loss_pl
+            + self.lambda_self_distill * loss_self_distill
         )
         self._ensure_finite("maple_loss_total", loss_total)
 
@@ -626,6 +809,11 @@ class CustomMaPLeMTDA(nn.Module):
                 "weak_pl_class_count:",
                 float(weak_pl_class_count.detach().item()),
             )
+            print("loss_self_distill:", float(loss_self_distill.detach().item()))
+            print(
+                "self_distill_coverage:",
+                float(self_distill_coverage.detach().item()),
+            )
             print("loss_total:", float(loss_total.detach().item()))
             self._debug_printed = True
 
@@ -640,6 +828,48 @@ class CustomMaPLeMTDA(nn.Module):
             "pl_student_conf": pl_student_conf.detach(),
             "clip_student_agreement": clip_student_agreement.detach(),
         }
+        if use_self_distill:
+            outputs.update(
+                {
+                    "loss_self_distill": loss_self_distill.detach(),
+                    "weighted_loss_self_distill": (
+                        self.lambda_self_distill * loss_self_distill
+                    ).detach(),
+                    "self_distill_coverage": self_distill_coverage.detach(),
+                    "self_distill_old_conf": self_distill_old_conf.detach(),
+                    "self_distill_student_conf": (
+                        self_distill_student_conf.detach()
+                    ),
+                    "self_distill_selected_old_conf": (
+                        self_distill_selected_old_conf.detach()
+                    ),
+                    "self_distill_selected_student_conf": (
+                        self_distill_selected_student_conf.detach()
+                    ),
+                    "self_distill_kl": self_distill_kl.detach(),
+                    "self_distill_selected_kl": self_distill_selected_kl.detach(),
+                    "self_distill_old_entropy": self_distill_old_entropy.detach(),
+                    "self_distill_selected_old_entropy": (
+                        self_distill_selected_old_entropy.detach()
+                    ),
+                    "self_distill_agreement": self_distill_agreement.detach(),
+                    "self_distill_selected_agreement": (
+                        self_distill_selected_agreement.detach()
+                    ),
+                    "self_distill_weight": loss_ce.new_tensor(
+                        self.lambda_self_distill
+                    ).detach(),
+                    "self_distill_temperature": loss_ce.new_tensor(
+                        self.self_distill_temperature
+                    ).detach(),
+                    "self_distill_old_conf_low": loss_ce.new_tensor(
+                        self.self_distill_old_conf_low
+                    ).detach(),
+                    "self_distill_old_conf_high": loss_ce.new_tensor(
+                        self.self_distill_old_conf_high
+                    ).detach(),
+                }
+            )
         if use_weak_pl:
             outputs.update(
                 {
@@ -692,6 +922,30 @@ class CustomMaPLeMTDA(nn.Module):
             outputs[f"clip_student_agreement_{domain_name}"] = stats[
                 "agreement"
             ].detach()
+        for domain_name, sd_loss in self_distill_by_domain.items():
+            outputs[f"loss_self_distill_{domain_name}"] = sd_loss.detach()
+        for domain_name, stats in self_distill_stats_by_domain.items():
+            outputs[f"self_distill_coverage_{domain_name}"] = stats[
+                "coverage"
+            ].detach()
+            outputs[f"self_distill_old_conf_{domain_name}"] = stats[
+                "old_conf"
+            ].detach()
+            outputs[f"self_distill_student_conf_{domain_name}"] = stats[
+                "student_conf"
+            ].detach()
+            outputs[f"self_distill_selected_old_conf_{domain_name}"] = stats[
+                "selected_old_conf"
+            ].detach()
+            outputs[f"self_distill_selected_student_conf_{domain_name}"] = stats[
+                "selected_student_conf"
+            ].detach()
+            outputs[f"self_distill_selected_kl_{domain_name}"] = stats[
+                "selected_kl"
+            ].detach()
+            outputs[f"self_distill_selected_agreement_{domain_name}"] = stats[
+                "selected_agreement"
+            ].detach()
         for domain_name, weak_pl_loss in weak_pl_by_domain.items():
             outputs[f"weak_loss_pl_{domain_name}"] = weak_pl_loss.detach()
         for domain_name, stats in weak_pl_stats_by_domain.items():
@@ -736,9 +990,61 @@ class MaPLeMTDA(MultiTargetTrainerXU):
         maple_cfg = cfg.TRAINER.MAPLE_MTDA
         assert maple_cfg.PREC in ["fp16", "fp32", "amp"]
         assert maple_cfg.LAMBDA_PL >= 0.0
+        assert maple_cfg.LAMBDA_PL_FINAL >= 0.0
+        assert maple_cfg.PL_SCHEDULE in ["constant", "cosine"]
         assert 0.0 <= maple_cfg.PL_THRESHOLD <= 1.0
         assert 0.0 <= maple_cfg.PL_STUDENT_THRESHOLD <= 1.0
+        assert 0.0 <= maple_cfg.SELF_DISTILL.OLD_CONF_LOW <= 1.0
+        assert 0.0 <= maple_cfg.SELF_DISTILL.OLD_CONF_HIGH <= 1.0
+        assert maple_cfg.SELF_DISTILL.OLD_CONF_LOW <= maple_cfg.SELF_DISTILL.OLD_CONF_HIGH
+        assert maple_cfg.SELF_DISTILL.LAMBDA >= 0.0
+        assert maple_cfg.SELF_DISTILL.TEMPERATURE > 0.0
         assert "{}" in maple_cfg.ZS_PROMPT_TEMPLATE
+
+    def _registered_model_name(self):
+        names = self.get_model_names()
+        if len(names) != 1:
+            raise RuntimeError(f"Expected one registered model, got {names}")
+        return names[0]
+
+    def _maybe_load_post_init_model(self):
+        post_cfg = self.cfg.TRAINER.MAPLE_MTDA.POST_INIT
+        if not bool(post_cfg.ENABLED):
+            return
+        if not post_cfg.MODEL_DIR:
+            raise ValueError("MAPLE_MTDA.POST_INIT.MODEL_DIR is required when enabled")
+
+        model_name = self._registered_model_name()
+        load_epoch = int(post_cfg.LOAD_EPOCH)
+        model_file = "model-best.pth.tar" if load_epoch <= 0 else f"model.pth.tar-{load_epoch}"
+        model_path = osp.join(str(post_cfg.MODEL_DIR), model_name, model_file)
+        if not osp.exists(model_path):
+            raise FileNotFoundError(f'Post-init model not found at "{model_path}"')
+
+        checkpoint = load_checkpoint_compat(model_path)
+        state_dict = checkpoint["state_dict"]
+        for key in ["prompt_learner.token_prefix", "prompt_learner.token_suffix"]:
+            state_dict.pop(key, None)
+
+        print(f'Post-init loading {model_name} weights from "{model_path}"')
+        missing, unexpected = self._models[model_name].load_state_dict(
+            state_dict, strict=False
+        )
+        if missing:
+            print(f"Post-init missing keys: {missing}")
+        if unexpected:
+            print(f"Post-init unexpected keys: {unexpected}")
+
+    def _maybe_build_self_distill_old_model(self):
+        sd_cfg = self.cfg.TRAINER.MAPLE_MTDA.SELF_DISTILL
+        if not (bool(sd_cfg.ENABLED) and float(sd_cfg.LAMBDA) > 0.0):
+            return
+        print("Building frozen old-student snapshot for self-distillation")
+        self.model.build_self_distill_old_model()
+
+    def _finish_maple_post_build_setup(self):
+        self._maybe_load_post_init_model()
+        self._maybe_build_self_distill_old_model()
 
     def build_model(self):
         cfg = self.cfg
@@ -777,6 +1083,7 @@ class MaPLeMTDA(MultiTargetTrainerXU):
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
         self.register_model("MaPLeMTDA", self.model, self.optim, self.sched)
         self.scaler = GradScaler() if cfg.TRAINER.MAPLE_MTDA.PREC == "amp" else None
+        self._finish_maple_post_build_setup()
 
     def forward_backward(self, batch_x, batch_u):
         image_x, label_x, image_u = self.parse_batch_train(batch_x, batch_u)

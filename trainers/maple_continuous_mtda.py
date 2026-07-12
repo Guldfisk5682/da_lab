@@ -216,6 +216,7 @@ class CustomContinuousMaPLeMTDA(CustomMaPLeMTDA):
             maple_cfg.PL_USE_STUDENT_LOW_CONF_MASK
         )
         self._init_weak_pl_config(maple_cfg)
+        self._init_self_distill_config(maple_cfg)
         self.debug_print_once = bool(maple_cfg.DEBUG.PRINT_ONCE)
         self._debug_printed = False
 
@@ -246,6 +247,13 @@ class CustomContinuousMaPLeMTDA(CustomMaPLeMTDA):
         )
         print(f"{self.log_prefix} weak PL student threshold: {self.weak_pl_student_threshold}")
         print(f"{self.log_prefix} weak PL class fraction: {self.weak_pl_fraction}")
+        print(f"{self.log_prefix} self-distill enabled: {self.self_distill_enabled}")
+        print(f"{self.log_prefix} self-distill weight: {self.lambda_self_distill}")
+        print(f"{self.log_prefix} self-distill temperature: {self.self_distill_temperature}")
+        print(
+            f"{self.log_prefix} self-distill old confidence band: "
+            f"[{self.self_distill_old_conf_low}, {self.self_distill_old_conf_high})"
+        )
         print(f"{self.log_prefix} zero-shot prompt template: {zs_template}")
 
 
@@ -461,6 +469,7 @@ class ContinuousMaPLeMTDA(MaPLeMTDA):
             from torch.cuda.amp import GradScaler
 
             self.scaler = GradScaler()
+        self._finish_maple_post_build_setup()
 
     def load_model(self, directory, epoch=None):
         if not directory:
@@ -529,6 +538,7 @@ class ContinuousSharedProjMaPLeMTDA(ContinuousMaPLeMTDA):
             from torch.cuda.amp import GradScaler
 
             self.scaler = GradScaler()
+        self._finish_maple_post_build_setup()
 
     def load_model(self, directory, epoch=None):
         if not directory:

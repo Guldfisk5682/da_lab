@@ -60,5 +60,16 @@ TRAINER:
       FRACTION: 0.2
       MOMENTUM: 0.9
       EPS: 1e-6
+    SELF_DISTILL:
+      ENABLED: false
+      LAMBDA: 0.0
+      TEMPERATURE: 2.0
+      OLD_CONF_LOW: 0.45
+      OLD_CONF_HIGH: 0.8
+      EPS: 1e-6
+    POST_INIT:
+      ENABLED: false
+      MODEL_DIR: ""
+      LOAD_EPOCH: -1
     DEBUG:
       PRINT_ONCE: false

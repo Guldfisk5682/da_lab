@@ -28,6 +28,8 @@ EXTRA_OPTS="${EXTRA_OPTS:-}"
 METHOD_TAG="${METHOD_TAG:-maple_continuous_shared_mtda}"
 DRY_RUN="${DRY_RUN:-0}"
 EVAL_EVERY_EPOCH="${EVAL_EVERY_EPOCH:-False}"
+POST_INIT_METHOD_TAG="${POST_INIT_METHOD_TAG:-}"
+POST_INIT_LOAD_EPOCH="${POST_INIT_LOAD_EPOCH:-5}"
 
 export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 
@@ -83,6 +85,16 @@ CFG_OPTS=(
   "TEST.EVAL_EVERY_EPOCH" "${EVAL_EVERY_EPOCH}"
 )
 
+POST_INIT_DIR=""
+if [ -n "${POST_INIT_METHOD_TAG}" ]; then
+  POST_INIT_DIR="${REPO_ROOT}/output/officehome_mtda/${POST_INIT_METHOD_TAG}/${SOURCE_CODE}2${TARGET_TAG}/seed${SEED}"
+  CFG_OPTS+=(
+    "TRAINER.MAPLE_MTDA.POST_INIT.ENABLED" "True"
+    "TRAINER.MAPLE_MTDA.POST_INIT.MODEL_DIR" "${POST_INIT_DIR}"
+    "TRAINER.MAPLE_MTDA.POST_INIT.LOAD_EPOCH" "${POST_INIT_LOAD_EPOCH}"
+  )
+fi
+
 if [ "${DEBUG_FLAG}" = "--debug" ]; then
   CFG_OPTS+=(
     "OPTIM.MAX_EPOCH" "1"
@@ -105,6 +117,9 @@ echo "  method tag: ${METHOD_TAG}"
 echo "  seed: ${SEED}"
 echo "  output: ${OUTPUT_DIR}"
 echo "  cfg: ${CFG}"
+if [ -n "${POST_INIT_DIR}" ]; then
+  echo "  post init: ${POST_INIT_DIR} (epoch ${POST_INIT_LOAD_EPOCH})"
+fi
 
 if [ "${DRY_RUN}" = "1" ]; then
   printf 'python train.py'
