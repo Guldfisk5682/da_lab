@@ -1,4 +1,5 @@
 import copy
+import math
 import os.path as osp
 
 import torch
@@ -169,6 +170,9 @@ class CustomMaPLeMTDA(nn.Module):
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
         self.lambda_pl = float(maple_cfg.LAMBDA_PL)
+        self.lambda_pl_final = float(maple_cfg.LAMBDA_PL_FINAL)
+        self.pl_schedule = str(maple_cfg.PL_SCHEDULE).lower()
+        self._pl_progress = 0.0
         self.pl_threshold = float(maple_cfg.PL_THRESHOLD)
         self.pl_student_threshold = float(maple_cfg.PL_STUDENT_THRESHOLD)
         self.pl_use_student_low_conf_mask = bool(
@@ -190,6 +194,8 @@ class CustomMaPLeMTDA(nn.Module):
 
         log_prefix = getattr(self, "log_prefix", "MaPLeMTDA")
         print(f"{log_prefix} pseudo-label weight: {self.lambda_pl}")
+        print(f"{log_prefix} pseudo-label final weight: {self.lambda_pl_final}")
+        print(f"{log_prefix} pseudo-label schedule: {self.pl_schedule}")
         print(f"{log_prefix} pseudo-label threshold: {self.pl_threshold}")
         print(f"{log_prefix} pseudo-label student threshold: {self.pl_student_threshold}")
         print(
@@ -205,6 +211,17 @@ class CustomMaPLeMTDA(nn.Module):
         print(f"{log_prefix} weak PL student threshold: {self.weak_pl_student_threshold}")
         print(f"{log_prefix} weak PL class fraction: {self.weak_pl_fraction}")
         print(f"{log_prefix} zero-shot prompt template: {zs_template}")
+
+    def set_training_progress(self, progress):
+        self._pl_progress = max(0.0, min(1.0, float(progress)))
+
+    def current_lambda_pl(self):
+        if self.pl_schedule == "constant":
+            return self.lambda_pl
+        if self.pl_schedule == "cosine":
+            cosine = 0.5 * (1.0 + math.cos(math.pi * self._pl_progress))
+            return self.lambda_pl_final + (self.lambda_pl - self.lambda_pl_final) * cosine
+        raise ValueError(f"Unsupported MAPLE_MTDA.PL_SCHEDULE={self.pl_schedule}")
 
     @staticmethod
     def _ensure_finite(name, tensor):
@@ -474,6 +491,7 @@ class CustomMaPLeMTDA(nn.Module):
         pl_stats_by_domain = {}
         weak_pl_by_domain = {}
         weak_pl_stats_by_domain = {}
+        lambda_pl_current = self.current_lambda_pl()
         use_clean_pl = self.lambda_pl > 0.0
         use_weak_pl = self.weak_pl_enabled and self.lambda_weak_pl > 0.0
         if use_clean_pl or use_weak_pl:
@@ -587,7 +605,7 @@ class CustomMaPLeMTDA(nn.Module):
 
         loss_total = (
             loss_ce
-            + self.lambda_pl * loss_pl
+            + lambda_pl_current * loss_pl
             + self.lambda_weak_pl * weak_loss_pl
         )
         self._ensure_finite("maple_loss_total", loss_total)
@@ -598,7 +616,7 @@ class CustomMaPLeMTDA(nn.Module):
             for domain_name, image_u in image_u_dict.items():
                 print(f"target batch shape [{domain_name}]:", tuple(image_u.shape))
             print("source logits shape:", tuple(logits_s.shape))
-            print("lambda_pl:", self.lambda_pl)
+            print("lambda_pl:", lambda_pl_current)
             print("loss_ce:", float(loss_ce.detach().item()))
             print("loss_pl:", float(loss_pl.detach().item()))
             print("pl_coverage:", float(pl_coverage.detach().item()))
@@ -615,7 +633,8 @@ class CustomMaPLeMTDA(nn.Module):
             "loss": loss_total,
             "source_ce": loss_ce.detach(),
             "loss_pl": loss_pl.detach(),
-            "weighted_loss_pl": (self.lambda_pl * loss_pl).detach(),
+            "weighted_loss_pl": (lambda_pl_current * loss_pl).detach(),
+            "lambda_pl_current": loss_ce.new_tensor(lambda_pl_current),
             "pl_coverage": pl_coverage.detach(),
             "pl_clip_conf": pl_clip_conf.detach(),
             "pl_student_conf": pl_student_conf.detach(),
@@ -761,6 +780,13 @@ class MaPLeMTDA(MultiTargetTrainerXU):
 
     def forward_backward(self, batch_x, batch_u):
         image_x, label_x, image_u = self.parse_batch_train(batch_x, batch_u)
+
+        progress = 0.0
+        if getattr(self, "max_epoch", 0) > 0 and getattr(self, "num_batches", 0) > 0:
+            denom = max(self.max_epoch * self.num_batches - 1, 1)
+            progress = (self.epoch * self.num_batches + self.batch_idx) / denom
+        if hasattr(self.model, "set_training_progress"):
+            self.model.set_training_progress(progress)
 
         if (
             bool(self.cfg.TRAINER.MAPLE_MTDA.DEBUG.PRINT_ONCE)

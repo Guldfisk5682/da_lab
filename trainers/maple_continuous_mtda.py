@@ -207,6 +207,9 @@ class CustomContinuousMaPLeMTDA(CustomMaPLeMTDA):
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
         self.lambda_pl = float(maple_cfg.LAMBDA_PL)
+        self.lambda_pl_final = float(maple_cfg.LAMBDA_PL_FINAL)
+        self.pl_schedule = str(maple_cfg.PL_SCHEDULE).lower()
+        self._pl_progress = 0.0
         self.pl_threshold = float(maple_cfg.PL_THRESHOLD)
         self.pl_student_threshold = float(maple_cfg.PL_STUDENT_THRESHOLD)
         self.pl_use_student_low_conf_mask = bool(
@@ -227,6 +230,8 @@ class CustomContinuousMaPLeMTDA(CustomMaPLeMTDA):
         )
 
         print(f"{self.log_prefix} pseudo-label weight: {self.lambda_pl}")
+        print(f"{self.log_prefix} pseudo-label final weight: {self.lambda_pl_final}")
+        print(f"{self.log_prefix} pseudo-label schedule: {self.pl_schedule}")
         print(f"{self.log_prefix} pseudo-label threshold: {self.pl_threshold}")
         print(f"{self.log_prefix} pseudo-label student threshold: {self.pl_student_threshold}")
         print(
