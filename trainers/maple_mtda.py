@@ -426,8 +426,11 @@ class CustomMaPLeMTDA(nn.Module):
             mask = mask & student_conf.lt(self.weak_pl_student_threshold)
 
         mask_float = mask.float()
-        ce = F.cross_entropy(student_logits, reference_label, reduction="none")
-        loss = (ce * mask_float).sum() / mask_float.sum().clamp_min(1.0)
+        if mask_float.sum().item() > 0:
+            ce = F.cross_entropy(student_logits, reference_label, reduction="none")
+            loss = (ce * mask_float).sum() / mask_float.sum().clamp_min(1.0)
+        else:
+            loss = student_logits.new_zeros(())
         self._ensure_finite("maple_weak_pseudo_label_loss", loss)
 
         stats = {
