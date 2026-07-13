@@ -857,3 +857,31 @@ five-epoch global schedule's LR histogram and integrated LR. Thus total steps,
 target/source exposure, LR values, and integrated LR remain controlled; only
 the assignment of LR to domains and cross-stage optimizer state are removed.
 The next paired runs are E2H Top-K8 reset and H2E Top-K8 reset, seed42.
+
+All remaining A2CPR seed42 causal controls completed on 2026-07-13:
+
+```text
+H2E no replay:       C 71.32 / P 90.27 / R 90.77 => 84.12
+E2H Top-K8 reset:    C 72.16 / P 90.65 / R 90.98 => 84.60
+H2E Top-K8 reset:    C 71.82 / P 90.67 / R 91.07 => 84.52
+```
+
+Stage-local reset removes the earlier large H2E advantage: reset E2H is only
++0.08 above reset H2E, effectively tied at one seed. Both reset variants are
+near/slightly above Joint PL03 (84.51), while stateful E2H was 84.19 and
+stateful H2E was 84.86. Therefore the stateful H2E-E2H gap mostly reflects the
+interaction between domain order and LR/momentum history, not robust evidence
+that hard-to-easy is intrinsically superior.
+
+H2E no replay (84.12) versus stateful H2E replay (84.86) gives a +0.74 replay
+gain under H2E. Together with E2H's +0.31 replay gain, reliable replay is the
+more consistent mechanism; ordering alone is not. Do not claim a universal
+H2E advantage from this pilot.
+
+Local reset-run archives:
+
+```text
+.tmp/agent_handoff/logs/curriculum_pilot/*resetopt*_run.log
+.tmp/agent_handoff/results/curriculum_pilot/e2h_reset_*_audit.jsonl
+.tmp/agent_handoff/results/curriculum_pilot/h2e_reset_*_audit.jsonl
+```
