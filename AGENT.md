@@ -790,3 +790,36 @@ screen: h2e_replay
 log: logs/maple_cshared_pl03_h2e_topk8replay_seed42_run.log
 order: clipart -> product -> real_world
 ```
+
+Experiment 4 completed on 2026-07-13 with a positive result:
+
+```text
+H2E Top-K8 replay stage 1: C 70.81 / P 91.08 / R 90.59 => 84.16
+H2E Top-K8 replay stage 2: C 71.91 / P 91.01 / R 90.64 => 84.52
+H2E Top-K8 replay final:   C 72.35 / P 90.94 / R 91.30 => 84.86
+```
+
+Final H2E Top-K8 is +0.35 over Joint PL03, +0.67 over E2H Top-K8, and
++0.98 over E2H no replay. Relative to Joint, C improves +0.80 and R improves
++0.50 while P drops -0.25. The stage macro average rises monotonically.
+
+The hard-first replay bank contained 475 clipart samples and then 984 cumulative
+clipart+product samples. Prior-bank frozen-label stability remained 1.0. Mean
+weighted replay losses (averaged over every optimizer step, including inactive
+steps) were 0.0831 in stage 2 and 0.1252 in stage 3, substantially larger than
+E2H's 0.0396 and 0.0612. This suggests hard-domain replay is more challenging
+and potentially more informative, not merely larger.
+
+Interpretation limit: the completed controls establish that H2E is better than
+E2H under the same replay rule, but there is no H2E-no-replay control yet.
+Therefore do not attribute the gain to hard-first ordering alone. The smallest
+next causal run is H2E no replay on A2CPR seed42; if the interaction survives,
+then repeat the selected pair on additional seeds before expanding datasets.
+
+Local archives:
+
+```text
+.tmp/agent_handoff/logs/curriculum_pilot/maple_cshared_pl03_h2e_topk8replay_seed42_run.log
+.tmp/agent_handoff/results/curriculum_pilot/h2e_stage_audit.jsonl
+.tmp/agent_handoff/results/curriculum_pilot/h2e_bank_audit.jsonl
+```
