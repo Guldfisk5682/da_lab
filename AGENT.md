@@ -885,3 +885,45 @@ Local reset-run archives:
 .tmp/agent_handoff/results/curriculum_pilot/e2h_reset_*_audit.jsonl
 .tmp/agent_handoff/results/curriculum_pilot/h2e_reset_*_audit.jsonl
 ```
+
+## Full Office-Home Stateful H2E Expansion (2026-07-13)
+
+Research hypothesis after the A2CPR causal pilot:
+
+```text
+When target-domain difficulty is highly imbalanced, joint MTDA cannot allocate
+limited prompt plasticity well. Stateful hard-first curriculum assigns early
+high-LR updates to the hardest target, while class-balanced reliable replay
+preserves that target as later/easier targets are fitted.
+```
+
+Do not describe reset-H2E's lower Clipart result as proven representation
+overwriting; it is a supported mechanism hypothesis. Test it through stagewise
+hardest-domain retention and replay audits.
+
+The next experiment expands stateful H2E Top-K8 replay, seed42, to C2APR,
+P2ACR, and R2ACP. Each task first requires its own source-only entropy probe;
+target labels must not influence ordering. C2APR and P2ACR source-only probes
+were launched in parallel at 2026-07-13 20:06 CST:
+
+```text
+method: maple_cshared_sourceonly_probe_seed42
+screens: c_probe (GPU0), p_probe (GPU1)
+logs: logs/maple_cshared_sourceonly_probe_seed42_{C2APR,P2ACR}_run.log
+```
+
+After all tasks complete, record per source task:
+
+```text
+source-only normalized entropy for all targets
+hardest-minus-second entropy gap
+Joint baseline accuracy gap between hardest and second-hardest
+H2E per-domain and macro gains over Joint
+hardest-domain stage-1 to final retention
+whether easy-domain accuracy is traded for hardest-domain gain
+replay bank coverage, exposure, stability, and loss contribution
+```
+
+With only four source tasks, entropy-gap correlations are descriptive evidence,
+not a statistically strong universal claim. Report both raw task points and
+Spearman/Pearson values, then seek confirmation on Office31/DomainNet.
