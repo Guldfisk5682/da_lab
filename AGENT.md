@@ -693,3 +693,45 @@ method tag, seed, command/config, result, conclusion, log/result path
 
 Do not paste long terminal output. Record paths and the few numbers needed to
 reconstruct the decision.
+
+## Curriculum + Reliable Replay Pilot (2026-07-13)
+
+The user approved formal implementation and launch of the first A2CPR seed42
+training-strategy pilot. The controlled groups are:
+
+```text
+2. easy-to-hard sequential targets, no replay
+3. easy-to-hard sequential targets, Top-K8 replay
+4. hard-to-easy sequential targets, Top-K8 replay
+```
+
+Implementation uses `CurriculumContinuousSharedProjMaPLeMTDA`. It preserves
+the Joint PL03 baseline's total optimizer steps, source batches, target-image
+forwards, scheduler and PL coefficient. Each step consumes three micro-batches
+from the active target domain. Stages divide the full five-epoch step budget
+into three equal parts and may cross epoch boundaries.
+
+Replay protocol:
+
+```text
+admission: student/frozen-CLIP argmax agreement
+thresholds: student >= 0.7 and CLIP >= 0.7
+selection: top 8 per fitted-domain x predicted-class; no threshold backfill
+labels: frozen at the stage boundary
+training: independent source-augmentation loader and hard CE, lambda 1.0
+exposure: replay loader is traversed at most once per subsequent stage
+```
+
+Audit files written into each output directory:
+
+```text
+curriculum_stage_audit.jsonl
+replay_bank_audit.jsonl
+```
+
+The trainer evaluates all target domains at each stage boundary and records
+bank class coverage, confidence, replay exposure/loss contribution, and prior
+bank label stability. The static easy-to-hard order must be supplied explicitly
+and must be chosen from an unlabeled source-only difficulty probe, never target
+accuracy. The three formal runs had not yet been launched when this note was
+written.

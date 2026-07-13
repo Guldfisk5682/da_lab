@@ -38,6 +38,7 @@ import trainers.cocoop_vpt_mtda
 import trainers.clip_tssp_mtda
 import trainers.clip_vpt_mtda
 import trainers.maple_continuous_mtda
+import trainers.maple_curriculum_mtda
 import trainers.maple_mtda
 import trainers.style_prompt_mtda
 import trainers.zsclip
@@ -265,6 +266,16 @@ def extend_cfg(cfg):
     cfg.TRAINER.MAPLE_MTDA.GAP_CTX.STYLE_EPS = 1e-6
     cfg.TRAINER.MAPLE_MTDA.DEBUG = CN()
     cfg.TRAINER.MAPLE_MTDA.DEBUG.PRINT_ONCE = False
+
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM = CN()
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.DOMAIN_ORDER = []
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.MICROBATCHES_PER_STEP = 3
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY = CN()
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.ENABLED = False
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.TOPK_PER_CLASS = 8
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.STUDENT_THRESHOLD = 0.7
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.CLIP_THRESHOLD = 0.7
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.LAMBDA = 1.0
 
     # Diagnostic-only switch. When enabled, MTDA trainers evaluate target
     # domains after every epoch to expose accuracy curves; normal experiments
