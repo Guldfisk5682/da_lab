@@ -823,3 +823,15 @@ Local archives:
 .tmp/agent_handoff/results/curriculum_pilot/h2e_stage_audit.jsonl
 .tmp/agent_handoff/results/curriculum_pilot/h2e_bank_audit.jsonl
 ```
+
+The approved H2E no-replay causal control was launched on GPU1 at 2026-07-13
+18:34 CST:
+
+```text
+method: maple_cshared_pl03_h2e_noreplay_seed42
+screen: h2e_noreplay
+log: logs/maple_cshared_pl03_h2e_noreplay_seed42_run.log
+order: clipart -> product -> real_world
+replay: disabled
+expected completion: around 19:08-19:14 CST
+```
