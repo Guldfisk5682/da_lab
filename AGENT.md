@@ -733,5 +733,26 @@ The trainer evaluates all target domains at each stage boundary and records
 bank class coverage, confidence, replay exposure/loss contribution, and prior
 bank label stability. The static easy-to-hard order must be supplied explicitly
 and must be chosen from an unlabeled source-only difficulty probe, never target
-accuracy. The three formal runs had not yet been launched when this note was
-written.
+accuracy.
+
+Source-only seed42 entropy ranking completed on 2026-07-13:
+
+```text
+real_world: normalized entropy 0.0874107
+product:    normalized entropy 0.0874928
+clipart:    normalized entropy 0.2388312
+E2H: real_world -> product -> clipart
+H2E: clipart -> product -> real_world
+artifact: results/curriculum_a2cpr/sourceonly_difficulty_seed42.json
+```
+
+Experiment 2 was launched on GPU0 at 2026-07-13 16:55 CST:
+
+```text
+method: maple_cshared_pl03_e2h_noreplay_seed42
+screen: run
+log: logs/maple_cshared_pl03_e2h_noreplay_seed42_run.log
+output: output/officehome_mtda/maple_cshared_pl03_e2h_noreplay_seed42/A2CPR/seed42
+initial measured throughput: about 0.62 sec/step
+initial completion estimate: around 17:27 CST
+```
