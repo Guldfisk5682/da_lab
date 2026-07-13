@@ -835,3 +835,25 @@ order: clipart -> product -> real_world
 replay: disabled
 expected completion: around 19:08-19:14 CST
 ```
+
+Stage-local optimizer/scheduler reset controls were approved and implemented
+while H2E no replay was running. The reset mode:
+
+```text
+TRAINER.MAPLE_MTDA.CURRICULUM.RESET_OPTIM_PER_STAGE=True
+TRAINER.MAPLE_MTDA.CURRICULUM.STAGE_VIRTUAL_EPOCHS=5
+```
+
+At every stage boundary it rebuilds SGD (clearing momentum/state) and the
+warmup+cosine scheduler. Each 1010-step domain stage experiences the same five
+LR segments, 202 steps each:
+
+```text
+1e-5, 0.0035, 0.0031657797, 0.0022907797, 0.0012092203
+```
+
+Across three stages, each LR occurs 606 times, exactly matching the original
+five-epoch global schedule's LR histogram and integrated LR. Thus total steps,
+target/source exposure, LR values, and integrated LR remain controlled; only
+the assignment of LR to domains and cross-stage optimizer state are removed.
+The next paired runs are E2H Top-K8 reset and H2E Top-K8 reset, seed42.

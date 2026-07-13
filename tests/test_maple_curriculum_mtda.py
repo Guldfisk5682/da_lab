@@ -2,7 +2,10 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from trainers.maple_curriculum_mtda import select_topk_replay_records
+from trainers.maple_curriculum_mtda import (
+    select_topk_replay_records,
+    stage_local_schedule_index,
+)
 
 
 def _record(name, student_label, student_conf, clip_label=None, clip_conf=0.9):
@@ -47,3 +50,21 @@ def test_selection_requires_agreement_and_both_thresholds_without_backfill():
     )
     assert eligible == 1
     assert [record["impath"] for record in selected] == ["valid"]
+
+
+def test_stage_local_schedule_gives_equal_lr_budget_to_each_virtual_epoch():
+    indices = [stage_local_schedule_index(step, 1010, 5) for step in range(1010)]
+    assert [indices.count(index) for index in range(5)] == [202] * 5
+
+
+@pytest.mark.parametrize("stage_length", [1009, 1010, 1011])
+def test_stage_local_schedule_covers_all_virtual_epochs(stage_length):
+    indices = [
+        stage_local_schedule_index(step, stage_length, 5)
+        for step in range(stage_length)
+    ]
+    assert indices == sorted(indices)
+    assert set(indices) == set(range(5))
+    assert max(indices.count(index) for index in range(5)) - min(
+        indices.count(index) for index in range(5)
+    ) <= 1

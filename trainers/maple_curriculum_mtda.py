@@ -20,6 +20,7 @@ from dassl.data.data_manager import build_data_loader
 from dassl.data.datasets import Datum
 from dassl.data.transforms import build_transform
 from dassl.engine import TRAINER_REGISTRY
+from dassl.optim import build_lr_scheduler, build_optimizer
 from dassl.utils import AverageMeter, MetricMeter
 
 from trainers.maple_continuous_mtda import (
@@ -66,6 +67,19 @@ def select_topk_replay_records(
 
     selected.sort(key=lambda item: (int(item["student_label"]), str(item["impath"])))
     return selected, eligible
+
+
+def stage_local_schedule_index(local_step, stage_length, virtual_epochs):
+    """Map a stage-local step to an equal-width virtual scheduler epoch."""
+    if stage_length <= 0:
+        raise ValueError("stage_length must be positive")
+    if virtual_epochs <= 0:
+        raise ValueError("virtual_epochs must be positive")
+    if local_step < 0 or local_step >= stage_length:
+        raise ValueError(
+            f"local_step must be in [0, {stage_length}), got {local_step}"
+        )
+    return min(virtual_epochs - 1, local_step * virtual_epochs // stage_length)
 
 
 class CustomCurriculumContinuousSharedProjMaPLeMTDA(
@@ -124,6 +138,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         curriculum_cfg = cfg.TRAINER.MAPLE_MTDA.CURRICULUM
         replay_cfg = curriculum_cfg.REPLAY
         assert int(curriculum_cfg.MICROBATCHES_PER_STEP) > 0
+        assert int(curriculum_cfg.STAGE_VIRTUAL_EPOCHS) > 0
         assert int(replay_cfg.TOPK_PER_CLASS) > 0
         assert 0.0 <= float(replay_cfg.STUDENT_THRESHOLD) <= 1.0
         assert 0.0 <= float(replay_cfg.CLIP_THRESHOLD) <= 1.0
@@ -141,6 +156,8 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             )
         self.curriculum_order = order
         self.microbatches_per_step = int(curriculum_cfg.MICROBATCHES_PER_STEP)
+        self.reset_optim_per_stage = bool(curriculum_cfg.RESET_OPTIM_PER_STAGE)
+        self.stage_virtual_epochs = int(curriculum_cfg.STAGE_VIRTUAL_EPOCHS)
         self.replay_cfg = curriculum_cfg.REPLAY
         self.replay_records = []
         self.replay_loader = None
@@ -152,11 +169,15 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self._stage_target_batches_seen = 0
         self._stage_target_images_seen = 0
         self._stage_weighted_replay_sum = 0.0
+        self._stage_scheduler_index = 0
         self._tfm_train = build_transform(self.cfg, is_train=True)
         self._tfm_test = build_transform(self.cfg, is_train=False)
         print(f"Curriculum target order: {self.curriculum_order}")
         print(f"Target micro-batches per optimizer step: {self.microbatches_per_step}")
         print(f"Replay enabled: {bool(self.replay_cfg.ENABLED)}")
+        print(f"Reset optimizer/scheduler per stage: {self.reset_optim_per_stage}")
+        if self.reset_optim_per_stage:
+            print(f"Stage-local virtual scheduler epochs: {self.stage_virtual_epochs}")
 
     def _compute_num_batches(self):
         len_x = len(self.train_loader_x)
@@ -175,6 +196,50 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             len(self.curriculum_order) - 1,
             global_step * len(self.curriculum_order) // max(total_steps, 1),
         )
+
+    def _stage_bounds(self, stage):
+        total_steps = self.max_epoch * self.num_batches
+        num_stages = len(self.curriculum_order)
+        start = (stage * total_steps + num_stages - 1) // num_stages
+        end = ((stage + 1) * total_steps + num_stages - 1) // num_stages
+        return start, end
+
+    def _reset_stage_optimizer_scheduler(self, stage):
+        self.optim = build_optimizer(self.model, self.cfg.OPTIM)
+        stage_optim_cfg = self.cfg.OPTIM.clone()
+        stage_optim_cfg.defrost()
+        stage_optim_cfg.MAX_EPOCH = self.stage_virtual_epochs
+        stage_optim_cfg.freeze()
+        self.sched = build_lr_scheduler(self.optim, stage_optim_cfg)
+        self._optims[self.model_name] = self.optim
+        self._scheds[self.model_name] = self.sched
+        self._stage_scheduler_index = 0
+        start, end = self._stage_bounds(stage)
+        print(
+            "Reset optimizer and scheduler for curriculum stage "
+            f"{stage + 1}: steps={end - start}, initial_lr={self.get_current_lr():.4e}"
+        )
+
+    def _update_stage_local_scheduler(self, stage):
+        if not self.reset_optim_per_stage:
+            return
+        start, end = self._stage_bounds(stage)
+        stage_length = end - start
+        if self._stage_optimizer_steps >= stage_length:
+            return
+        target_index = stage_local_schedule_index(
+            self._stage_optimizer_steps,
+            stage_length,
+            self.stage_virtual_epochs,
+        )
+        while self._stage_scheduler_index < target_index:
+            self.sched.step()
+            self._stage_scheduler_index += 1
+            print(
+                "Stage-local scheduler step: "
+                f"stage={stage + 1}, virtual_epoch={self._stage_scheduler_index + 1}/"
+                f"{self.stage_virtual_epochs}, lr={self.get_current_lr():.4e}"
+            )
 
     @staticmethod
     def _next_cycled(iterator, loader):
@@ -236,6 +301,8 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                 self._stage_weighted_replay_sum / self._stage_optimizer_steps
                 if self._stage_optimizer_steps else 0.0
             ),
+            "reset_optim_per_stage": self.reset_optim_per_stage,
+            "stage_virtual_epochs": self.stage_virtual_epochs,
         }
         self._write_jsonl("curriculum_stage_audit.jsonl", audit)
         print("Curriculum stage audit: " + json.dumps(audit, sort_keys=True))
@@ -366,6 +433,8 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self._stage_target_batches_seen = 0
         self._stage_target_images_seen = 0
         self._stage_weighted_replay_sum = 0.0
+        if self.reset_optim_per_stage:
+            self._reset_stage_optimizer_scheduler(stage)
         self._build_replay_loader() if bool(self.replay_cfg.ENABLED) else None
         print(
             f"Entering curriculum stage {stage + 1}/{len(self.curriculum_order)}: "
@@ -434,7 +503,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         for key, value in outputs.items():
             if key != "loss":
                 summary[key] = value.item() if torch.is_tensor(value) else float(value)
-        if (self.batch_idx + 1) == self.num_batches:
+        if not self.reset_optim_per_stage and (self.batch_idx + 1) == self.num_batches:
             self.update_lr()
         return summary
 
@@ -477,6 +546,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             self._stage_weighted_replay_sum += loss_summary[
                 "weighted_loss_replay"
             ]
+            self._update_stage_local_scheduler(stage)
             batch_time.update(time.time() - end)
             losses.update(loss_summary)
 
