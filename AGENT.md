@@ -768,3 +768,25 @@ order: real_world -> product -> clipart
 replay: Top-K8 per domain x predicted class, lambda 1.0
 initial completion estimate including boundary audits: around 17:42-17:48 CST
 ```
+
+Experiments 2 and 3 completed on 2026-07-13:
+
+```text
+Joint PL03 baseline: C 71.55 / P 91.19 / R 90.80 => 84.51
+E2H no replay:      C 70.61 / P 90.67 / R 90.36 => 83.88
+E2H Top-K8 replay:  C 70.77 / P 91.03 / R 90.77 => 84.19
+```
+
+Replay improved E2H by +0.31 macro but remained -0.32 below Joint. Replay
+bank sizes were 513 after real_world and 1022 after product; frozen-label
+stability was 1.0 at both later audits. The replay loader traversed 512 images
+in stage 2 and 1020 in stage 3, once per stage as intended.
+
+Experiment 4 launched on GPU1 at 2026-07-13 17:52 CST:
+
+```text
+method: maple_cshared_pl03_h2e_topk8replay_seed42
+screen: h2e_replay
+log: logs/maple_cshared_pl03_h2e_topk8replay_seed42_run.log
+order: clipart -> product -> real_world
+```
