@@ -927,3 +927,57 @@ replay bank coverage, exposure, stability, and loss contribution
 With only four source tasks, entropy-gap correlations are descriptive evidence,
 not a statistically strong universal claim. Report both raw task points and
 Spearman/Pearson values, then seek confirmation on Office31/DomainNet.
+
+## H2E Result Boundary and Diagnostic Infrastructure (2026-07-14)
+
+Stateful H2E Top-K8 replay, seed42, completed on all Office-Home source tasks:
+
+```text
+A2CPR: 84.86 vs Joint 84.51 => +0.35; hardest Clipart +0.80
+C2APR: 89.02 vs Joint 89.07 => -0.05; hardest Art +0.20
+P2ACR: 82.40 vs Joint 82.35 => +0.05; hardest Clipart +0.48
+R2ACP: 82.77 vs Joint 82.84 => -0.07; hardest Clipart +0.23
+overall: 84.76 vs 84.69 => +0.07
+```
+
+Seed100 A/C controls disproved the strong claim that the current method
+consistently improves the hardest domain:
+
+```text
+A2CPR: H2E 84.17 vs Joint 84.22 => -0.05; Clipart -0.34
+C2APR: H2E 88.50 vs Joint 87.94 => +0.56; Art -0.16
+```
+
+The source-only entropy orders were identical across seeds, so the sign flip
+was not caused by order instability. Treat H2E+Replay as an analysis baseline,
+not the main method. Diagnose pseudo-label quality, replay delivery,
+cross-domain gradient conflict, and shared-prompt capacity before adding new
+modules or reverting to PairGap.
+
+Local diagnostic code now supports, without changing the default replay path:
+
+```text
+online/oracle-correct/frozen-manifest selection
+pseudo/ground-truth replay labels
+one-pass/cycled replay traversal
+all-target sample snapshots at every stage boundary
+replay manifests that freeze indices across causal oracle runs
+per-class PL/replay quality and cross-stage transition aggregation
+pairwise target-domain prompt-gradient cosine audits
+independent source-to-single-target STDA upper-bound runs
+```
+
+The current default remains `online + pseudo + one_pass`, matching the old
+algorithm. Target-label modes require diagnostics to be enabled and print an
+explicit invalid-for-UDA warning. Extra all-domain audit passes preserve and
+restore Python/NumPy/Torch/CUDA RNG states. Usage is documented in
+`scripts/maple_curriculum_mtda/DIAGNOSTICS.md`.
+
+Important implementation fact: the original replay loader is exhausted once
+per stage and then disabled. Typical exposure is about 118/1010 optimizer
+steps in stage 2 and 240/1010 in stage 3. Therefore a fixed-index GT-label
+oracle that does not improve performance only rules out label noise under the
+current sparse exposure; it does not by itself prove prompt-capacity failure.
+
+Do not pull this diagnostic commit or launch diagnostic experiments on the
+remote training server until the user explicitly approves it.

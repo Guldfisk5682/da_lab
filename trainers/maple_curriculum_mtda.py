@@ -9,9 +9,11 @@ term over frozen pseudo labels selected at each stage boundary.
 import datetime
 import json
 import os
+import random
 import time
 from collections import OrderedDict, defaultdict
 
+import numpy as np
 import torch
 from torch.cuda.amp import autocast
 from torch.nn import functional as F
@@ -35,11 +37,13 @@ def select_topk_replay_records(
     topk_per_class,
     student_threshold,
     clip_threshold,
+    prefer_correct=False,
 ):
     """Select deterministic top-k records per predicted class.
 
     A record is eligible only when student and frozen CLIP agree and both meet
-    their confidence thresholds. Ground-truth labels are never consulted.
+    their confidence thresholds. Ground-truth labels are consulted only by the
+    explicitly diagnostic ``prefer_correct`` oracle mode.
     """
     grouped = defaultdict(list)
     eligible = 0
@@ -55,9 +59,19 @@ def select_topk_replay_records(
 
     selected = []
     for predicted_class in sorted(grouped):
+        if prefer_correct:
+            for item in grouped[predicted_class]:
+                if "true_label" not in item:
+                    raise ValueError(
+                        "oracle-correct replay selection requires true_label"
+                    )
         candidates = sorted(
             grouped[predicted_class],
             key=lambda item: (
+                int(
+                    prefer_correct
+                    and int(item["student_label"]) != int(item["true_label"])
+                ),
                 -float(item["student_conf"]),
                 -float(item["clip_conf"]),
                 str(item["impath"]),
@@ -67,6 +81,71 @@ def select_topk_replay_records(
 
     selected.sort(key=lambda item: (int(item["student_label"]), str(item["impath"])))
     return selected, eligible
+
+
+def load_replay_manifest(path):
+    """Load stage-indexed replay selections written by this trainer."""
+    manifests = {}
+    with open(path, "r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            key = (int(payload["stage"]), str(payload["fitted_domain"]))
+            if key in manifests:
+                raise ValueError(
+                    f"Duplicate replay manifest entry {key} at line {line_number}"
+                )
+            manifests[key] = payload
+    if not manifests:
+        raise ValueError(f"Replay manifest is empty: {path}")
+    return manifests
+
+
+def materialize_manifest_records(payload, current_records, label_source):
+    """Join a frozen selection manifest with current dataset metadata."""
+    current_by_path = {str(record["impath"]): record for record in current_records}
+    selected = []
+    missing = []
+    frozen_paths = [str(record["impath"]) for record in payload.get("records", [])]
+    if len(frozen_paths) != len(set(frozen_paths)):
+        raise ValueError("Replay manifest contains duplicate sample paths")
+    for frozen in payload.get("records", []):
+        impath = str(frozen["impath"])
+        current = current_by_path.get(impath)
+        if current is None:
+            missing.append(impath)
+            continue
+        record = dict(current)
+        record["selection_origin"] = "manifest"
+        record["pseudo_label"] = int(
+            frozen.get("pseudo_label", frozen["student_label"])
+        )
+        record["selection_student_label"] = int(
+            frozen.get("selection_student_label", frozen["student_label"])
+        )
+        record["selection_clip_label"] = int(
+            frozen.get("selection_clip_label", frozen.get("clip_label", record["pseudo_label"]))
+        )
+        record["selection_student_conf"] = float(
+            frozen.get("student_conf", current["student_conf"])
+        )
+        record["selection_clip_conf"] = float(
+            frozen.get("clip_conf", current["clip_conf"])
+        )
+        record["replay_label"] = (
+            int(record["true_label"])
+            if label_source == "ground_truth"
+            else int(record["pseudo_label"])
+        )
+        selected.append(record)
+    if missing:
+        preview = ", ".join(missing[:3])
+        raise ValueError(
+            f"Replay manifest contains {len(missing)} paths absent from the "
+            f"current dataset, e.g. {preview}"
+        )
+    return selected
 
 
 def stage_local_schedule_index(local_step, stage_length, virtual_epochs):
@@ -143,6 +222,18 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         assert 0.0 <= float(replay_cfg.STUDENT_THRESHOLD) <= 1.0
         assert 0.0 <= float(replay_cfg.CLIP_THRESHOLD) <= 1.0
         assert float(replay_cfg.LAMBDA) >= 0.0
+        selection_mode = str(replay_cfg.SELECTION_MODE).lower()
+        label_source = str(replay_cfg.LABEL_SOURCE).lower()
+        traversal = str(replay_cfg.TRAVERSAL).lower()
+        assert selection_mode in {"online", "oracle_correct", "manifest"}
+        assert label_source in {"pseudo", "ground_truth"}
+        assert traversal in {"one_pass", "cycle"}
+        if selection_mode == "manifest":
+            assert str(replay_cfg.MANIFEST_PATH).strip()
+        if selection_mode == "oracle_correct" or label_source == "ground_truth":
+            assert bool(curriculum_cfg.DIAGNOSTICS.ENABLED), (
+                "Target-label oracle modes require CURRICULUM.DIAGNOSTICS.ENABLED"
+            )
 
     def build_data_loader(self):
         super().build_data_loader()
@@ -159,6 +250,16 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self.reset_optim_per_stage = bool(curriculum_cfg.RESET_OPTIM_PER_STAGE)
         self.stage_virtual_epochs = int(curriculum_cfg.STAGE_VIRTUAL_EPOCHS)
         self.replay_cfg = curriculum_cfg.REPLAY
+        self.diagnostics_cfg = curriculum_cfg.DIAGNOSTICS
+        self.replay_selection_mode = str(self.replay_cfg.SELECTION_MODE).lower()
+        self.replay_label_source = str(self.replay_cfg.LABEL_SOURCE).lower()
+        self.replay_traversal = str(self.replay_cfg.TRAVERSAL).lower()
+        self.diagnostics_enabled = bool(self.diagnostics_cfg.ENABLED)
+        self.audit_all_domains = bool(self.diagnostics_cfg.AUDIT_ALL_DOMAINS)
+        self.frozen_replay_manifests = None
+        if self.replay_selection_mode == "manifest":
+            manifest_path = os.path.expanduser(str(self.replay_cfg.MANIFEST_PATH))
+            self.frozen_replay_manifests = load_replay_manifest(manifest_path)
         self.replay_records = []
         self.replay_loader = None
         self.replay_iterator = None
@@ -175,6 +276,18 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         print(f"Curriculum target order: {self.curriculum_order}")
         print(f"Target micro-batches per optimizer step: {self.microbatches_per_step}")
         print(f"Replay enabled: {bool(self.replay_cfg.ENABLED)}")
+        print(f"Replay selection mode: {self.replay_selection_mode}")
+        print(f"Replay label source: {self.replay_label_source}")
+        print(f"Replay traversal: {self.replay_traversal}")
+        print(f"Full prediction diagnostics: {self.diagnostics_enabled}")
+        if (
+            self.replay_selection_mode == "oracle_correct"
+            or self.replay_label_source == "ground_truth"
+        ):
+            print(
+                "WARNING: target ground truth is active for diagnosis only; "
+                "this run is not a valid UDA result"
+            )
         print(f"Reset optimizer/scheduler per stage: {self.reset_optim_per_stage}")
         if self.reset_optim_per_stage:
             print(f"Stage-local virtual scheduler epochs: {self.stage_virtual_epochs}")
@@ -270,7 +383,9 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                     {
                         "domain": domain_name,
                         "domain_id": int(item.domain),
+                        "dataset_index": int(index),
                         "impath": item.impath,
+                        "true_label": int(item.label),
                         "student_label": int(student_label[offset].item()),
                         "student_conf": float(student_conf[offset].item()),
                         "clip_label": int(clip_label[offset].item()),
@@ -286,6 +401,209 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         os.makedirs(self.output_dir, exist_ok=True)
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+    def _write_jsonl_many(self, filename, payloads):
+        path = os.path.join(self.output_dir, filename)
+        os.makedirs(self.output_dir, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            for payload in payloads:
+                handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+    def _eligible_records(self, records):
+        return [
+            record
+            for record in records
+            if record["student_label"] == record["clip_label"]
+            and record["student_conf"] >= float(self.replay_cfg.STUDENT_THRESHOLD)
+            and record["clip_conf"] >= float(self.replay_cfg.CLIP_THRESHOLD)
+        ]
+
+    def _prepare_online_selection(self, selected):
+        prepared = []
+        for original in selected:
+            record = dict(original)
+            record["selection_origin"] = self.replay_selection_mode
+            record["pseudo_label"] = int(record["student_label"])
+            record["selection_student_label"] = int(record["student_label"])
+            record["selection_clip_label"] = int(record["clip_label"])
+            record["selection_student_conf"] = float(record["student_conf"])
+            record["selection_clip_conf"] = float(record["clip_conf"])
+            record["replay_label"] = (
+                int(record["true_label"])
+                if self.replay_label_source == "ground_truth"
+                else int(record["pseudo_label"])
+            )
+            prepared.append(record)
+        return prepared
+
+    def _select_stage_replay(self, stage, domain_name, scored):
+        if self.replay_selection_mode == "manifest":
+            key = (int(stage), str(domain_name))
+            if key not in self.frozen_replay_manifests:
+                raise ValueError(f"Replay manifest is missing stage/domain {key}")
+            payload = self.frozen_replay_manifests[key]
+            if "seed" in payload and int(payload["seed"]) != int(self.cfg.SEED):
+                raise ValueError(
+                    f"Replay manifest seed {payload['seed']} does not match "
+                    f"run seed {self.cfg.SEED}"
+                )
+            if "curriculum_order" in payload and list(
+                payload["curriculum_order"]
+            ) != list(self.curriculum_order):
+                raise ValueError("Replay manifest curriculum order does not match run")
+            if int(payload.get("topk_per_class", self.replay_cfg.TOPK_PER_CLASS)) != int(
+                self.replay_cfg.TOPK_PER_CLASS
+            ):
+                raise ValueError("Replay manifest Top-K does not match run")
+            selected = materialize_manifest_records(
+                payload,
+                scored,
+                self.replay_label_source,
+            )
+            eligible = len(self._eligible_records(scored))
+        else:
+            selected, eligible = select_topk_replay_records(
+                scored,
+                topk_per_class=int(self.replay_cfg.TOPK_PER_CLASS),
+                student_threshold=float(self.replay_cfg.STUDENT_THRESHOLD),
+                clip_threshold=float(self.replay_cfg.CLIP_THRESHOLD),
+                prefer_correct=self.replay_selection_mode == "oracle_correct",
+            )
+            selected = self._prepare_online_selection(selected)
+        self._write_selection_manifest(stage, domain_name, selected)
+        return selected, eligible
+
+    def _write_selection_manifest(self, stage, domain_name, selected):
+        records = []
+        for record in selected:
+            records.append(
+                {
+                    "domain": str(record["domain"]),
+                    "domain_id": int(record["domain_id"]),
+                    "dataset_index": int(record["dataset_index"]),
+                    "impath": str(record["impath"]),
+                    "true_label": int(record["true_label"]),
+                    "student_label": int(record["student_label"]),
+                    "student_conf": float(record["student_conf"]),
+                    "clip_label": int(record["clip_label"]),
+                    "clip_conf": float(record["clip_conf"]),
+                    "pseudo_label": int(record["pseudo_label"]),
+                    "selection_student_label": int(
+                        record["selection_student_label"]
+                    ),
+                    "selection_clip_label": int(record["selection_clip_label"]),
+                    "replay_label": int(record["replay_label"]),
+                    "selection_origin": str(record["selection_origin"]),
+                }
+            )
+        payload = {
+            "stage": int(stage),
+            "fitted_domain": str(domain_name),
+            "seed": int(self.cfg.SEED),
+            "curriculum_order": list(self.curriculum_order),
+            "selection_mode": self.replay_selection_mode,
+            "label_source": self.replay_label_source,
+            "topk_per_class": int(self.replay_cfg.TOPK_PER_CLASS),
+            "records": records,
+        }
+        self._write_jsonl("replay_selection_manifest.jsonl", payload)
+
+    def _score_domains_for_boundary(self, fitted_domain):
+        scored = {fitted_domain: self._score_domain_for_replay(fitted_domain)}
+        if not (self.diagnostics_enabled and self.audit_all_domains):
+            return scored
+
+        # Extra diagnostics must not perturb the subsequent training stream.
+        # The fitted-domain scoring above is part of the original algorithm;
+        # only the newly added all-domain passes are wrapped and restored.
+        python_state = random.getstate()
+        numpy_state = np.random.get_state()
+        torch_state = torch.get_rng_state()
+        cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        try:
+            for domain in self.curriculum_order:
+                if domain != fitted_domain:
+                    scored[domain] = self._score_domain_for_replay(domain)
+        finally:
+            random.setstate(python_state)
+            np.random.set_state(numpy_state)
+            torch.set_rng_state(torch_state)
+            if cuda_states is not None:
+                torch.cuda.set_rng_state_all(cuda_states)
+        return scored
+
+    def _write_prediction_audit(
+        self,
+        stage,
+        fitted_domain,
+        global_step,
+        scored_by_domain,
+        actual_selected,
+    ):
+        if not self.diagnostics_enabled:
+            return
+        actual_paths = {str(record["impath"]) for record in actual_selected}
+        payloads = []
+        for domain_name, records in scored_by_domain.items():
+            standard, _ = select_topk_replay_records(
+                records,
+                topk_per_class=int(self.replay_cfg.TOPK_PER_CLASS),
+                student_threshold=float(self.replay_cfg.STUDENT_THRESHOLD),
+                clip_threshold=float(self.replay_cfg.CLIP_THRESHOLD),
+            )
+            oracle, _ = select_topk_replay_records(
+                records,
+                topk_per_class=int(self.replay_cfg.TOPK_PER_CLASS),
+                student_threshold=float(self.replay_cfg.STUDENT_THRESHOLD),
+                clip_threshold=float(self.replay_cfg.CLIP_THRESHOLD),
+                prefer_correct=True,
+            )
+            standard_paths = {str(record["impath"]) for record in standard}
+            oracle_paths = {str(record["impath"]) for record in oracle}
+            eligible_paths = {
+                str(record["impath"]) for record in self._eligible_records(records)
+            }
+            for record in records:
+                payload = dict(record)
+                impath = str(record["impath"])
+                student_correct = int(record["student_label"]) == int(
+                    record["true_label"]
+                )
+                clip_correct = int(record["clip_label"]) == int(
+                    record["true_label"]
+                )
+                agreement = int(record["student_label"]) == int(
+                    record["clip_label"]
+                )
+                clean_pl_selected = float(record["clip_conf"]) >= float(
+                    self.model.pl_threshold
+                )
+                if bool(self.model.pl_use_student_low_conf_mask):
+                    clean_pl_selected = clean_pl_selected and float(
+                        record["student_conf"]
+                    ) < float(self.model.pl_student_threshold)
+                payload.update(
+                    {
+                        "boundary_stage": int(stage),
+                        "boundary_global_step": int(global_step),
+                        "fitted_domain": str(fitted_domain),
+                        "student_correct": bool(student_correct),
+                        "clip_correct": bool(clip_correct),
+                        "agreement": bool(agreement),
+                        "both_wrong_agree": bool(
+                            agreement and not student_correct and not clip_correct
+                        ),
+                        "clean_pl_selected": bool(clean_pl_selected),
+                        "eligible": impath in eligible_paths,
+                        "standard_topk": impath in standard_paths,
+                        "oracle_correct_topk": impath in oracle_paths,
+                        "actual_selected": bool(
+                            domain_name == fitted_domain and impath in actual_paths
+                        ),
+                    }
+                )
+                payloads.append(payload)
+        self._write_jsonl_many("pl_sample_audit.jsonl", payloads)
 
     def _write_stage_audit(self, stage, domain_name, global_step):
         audit = {
@@ -314,9 +632,11 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         items = [
             Datum(
                 impath=record["impath"],
-                label=int(record["student_label"]),
+                label=int(record.get("pseudo_label", record["student_label"])),
                 domain=int(record["domain_id"]),
-                classname=self.lab2cname[int(record["student_label"])],
+                classname=self.lab2cname[
+                    int(record.get("pseudo_label", record["student_label"]))
+                ],
             )
             for record in self.replay_records
         ]
@@ -330,46 +650,154 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         )
         was_training = self.model.training
         self.set_model_mode("eval")
-        matched = 0
+        pseudo_matched = 0
+        replay_matched = 0
+        true_matched = 0
         total = 0
+        replay_labels = [
+            int(record.get("replay_label", record["student_label"]))
+            for record in self.replay_records
+        ]
+        true_labels = [int(record["true_label"]) for record in self.replay_records]
+        offset = 0
         for batch in loader:
             image = batch["img"].to(self.device)
-            frozen_label = batch["label"].to(self.device)
+            pseudo_label = batch["label"].to(self.device)
             prediction = self.model(image).argmax(dim=-1)
-            matched += int(prediction.eq(frozen_label).sum().item())
-            total += int(frozen_label.numel())
+            count = int(pseudo_label.numel())
+            replay_label = torch.tensor(
+                replay_labels[offset : offset + count], device=self.device
+            )
+            true_label = torch.tensor(
+                true_labels[offset : offset + count], device=self.device
+            )
+            pseudo_matched += int(prediction.eq(pseudo_label).sum().item())
+            replay_matched += int(prediction.eq(replay_label).sum().item())
+            true_matched += int(prediction.eq(true_label).sum().item())
+            total += count
+            offset += count
         if was_training:
             self.set_model_mode("train")
-        return matched / total if total else None
+        if not total:
+            return None
+        return {
+            "pseudo_label_stability": pseudo_matched / total,
+            "replay_label_agreement": replay_matched / total,
+            "true_accuracy": true_matched / total,
+            "samples": total,
+        }
 
     def _write_bank_audit(
-        self, stage, domain_name, selected, eligible, total, prior_bank_stability
+        self,
+        stage,
+        domain_name,
+        selected,
+        eligible,
+        total,
+        prior_bank_stability,
+        scored=None,
     ):
         class_counts = defaultdict(int)
+        true_class_counts = defaultdict(int)
         for record in selected:
-            class_counts[str(record["student_label"])] += 1
+            class_counts[str(record.get("pseudo_label", record["student_label"]))] += 1
+            true_class_counts[str(record["true_label"])] += 1
+        eligible_records = self._eligible_records(scored or [])
+        eligible_correct = sum(
+            int(record["student_label"]) == int(record["true_label"])
+            for record in eligible_records
+        )
+        eligible_both_wrong_agree = sum(
+            int(record["student_label"]) == int(record["clip_label"])
+            and int(record["student_label"]) != int(record["true_label"])
+            for record in eligible_records
+        )
+        correct_eligible_per_class = defaultdict(int)
+        for record in eligible_records:
+            if int(record["student_label"]) == int(record["true_label"]):
+                correct_eligible_per_class[str(record["student_label"])] += 1
+        oracle_shortfall_per_class = {
+            str(class_index): max(
+                0,
+                int(self.replay_cfg.TOPK_PER_CLASS)
+                - correct_eligible_per_class.get(str(class_index), 0),
+            )
+            for class_index in range(self.num_classes)
+        }
+        selected_correct = sum(
+            int(record.get("pseudo_label", record["student_label"]))
+            == int(record["true_label"])
+            for record in selected
+        )
+        selected_both_wrong_agree = sum(
+            int(record["selection_student_label"])
+            == int(record["selection_clip_label"])
+            and int(record["selection_student_label"])
+            != int(record["true_label"])
+            for record in selected
+        )
+        stability = prior_bank_stability or {}
         audit = {
             "stage": stage,
             "fitted_domain": domain_name,
             "total_scored": total,
             "eligible": eligible,
+            "eligible_pseudo_accuracy": (
+                eligible_correct / len(eligible_records)
+                if eligible_records
+                else None
+            ),
+            "eligible_both_wrong_agree_rate": (
+                eligible_both_wrong_agree / len(eligible_records)
+                if eligible_records
+                else None
+            ),
+            "correct_eligible_per_class": dict(
+                sorted(correct_eligible_per_class.items(), key=lambda x: int(x[0]))
+            ),
+            "oracle_correct_shortfall_per_class": oracle_shortfall_per_class,
+            "oracle_correct_weak_class_count": sum(
+                shortfall > 0 for shortfall in oracle_shortfall_per_class.values()
+            ),
             "selected": len(selected),
             "class_coverage": len(class_counts),
             "num_classes": self.num_classes,
             "selected_per_class": dict(sorted(class_counts.items(), key=lambda x: int(x[0]))),
+            "selected_per_true_class": dict(
+                sorted(true_class_counts.items(), key=lambda x: int(x[0]))
+            ),
+            "true_class_coverage": len(true_class_counts),
+            "selected_pseudo_accuracy": (
+                selected_correct / len(selected) if selected else None
+            ),
+            "selected_both_wrong_agree_rate": (
+                selected_both_wrong_agree / len(selected) if selected else None
+            ),
             "mean_student_conf": (
-                sum(record["student_conf"] for record in selected) / len(selected)
+                sum(record["selection_student_conf"] for record in selected)
+                / len(selected)
                 if selected else 0.0
             ),
             "mean_clip_conf": (
-                sum(record["clip_conf"] for record in selected) / len(selected)
+                sum(record["selection_clip_conf"] for record in selected)
+                / len(selected)
                 if selected else 0.0
             ),
             "cumulative_bank_size": len(self.replay_records),
-            "prior_bank_label_stability": prior_bank_stability,
+            "prior_bank_label_stability": stability.get(
+                "pseudo_label_stability"
+            ),
+            "prior_bank_replay_label_agreement": stability.get(
+                "replay_label_agreement"
+            ),
+            "prior_bank_true_accuracy": stability.get("true_accuracy"),
+            "prior_bank_samples": stability.get("samples"),
             "topk_per_class": int(self.replay_cfg.TOPK_PER_CLASS),
             "student_threshold": float(self.replay_cfg.STUDENT_THRESHOLD),
             "clip_threshold": float(self.replay_cfg.CLIP_THRESHOLD),
+            "selection_mode": self.replay_selection_mode,
+            "label_source": self.replay_label_source,
+            "traversal": self.replay_traversal,
         }
         self._write_jsonl("replay_bank_audit.jsonl", audit)
         print("Replay bank audit: " + json.dumps(audit, sort_keys=True))
@@ -382,9 +810,11 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         replay_items = [
             Datum(
                 impath=record["impath"],
-                label=int(record["student_label"]),
+                label=int(record.get("replay_label", record["student_label"])),
                 domain=int(record["domain_id"]),
-                classname=self.lab2cname[int(record["student_label"])],
+                classname=self.lab2cname[
+                    int(record.get("replay_label", record["student_label"]))
+                ],
             )
             for record in self.replay_records
         ]
@@ -398,30 +828,51 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         )
         self.replay_iterator = iter(self.replay_loader)
 
+    def _finalize_fitted_stage(
+        self,
+        stage,
+        fitted_domain,
+        global_step,
+        *,
+        add_to_bank,
+    ):
+        prior_bank_stability = self._measure_bank_stability()
+        print(f"Scoring fitted domain for frozen replay: {fitted_domain}")
+        scored_by_domain = self._score_domains_for_boundary(fitted_domain)
+        scored = scored_by_domain[fitted_domain]
+        selected, eligible = self._select_stage_replay(
+            stage, fitted_domain, scored
+        )
+        self._write_prediction_audit(
+            stage,
+            fitted_domain,
+            global_step,
+            scored_by_domain,
+            selected,
+        )
+        if add_to_bank and bool(self.replay_cfg.ENABLED):
+            self.replay_records.extend(selected)
+        self._write_bank_audit(
+            stage,
+            fitted_domain,
+            selected,
+            eligible,
+            len(scored),
+            prior_bank_stability,
+            scored=scored,
+        )
+
     def _enter_stage(self, stage, global_step):
         if self._active_stage == stage:
             return
         if self._active_stage is not None:
             fitted_domain = self.curriculum_order[self._active_stage]
             self._write_stage_audit(self._active_stage, fitted_domain, global_step)
-            prior_bank_stability = self._measure_bank_stability()
-            print(f"Scoring fitted domain for frozen replay: {fitted_domain}")
-            scored = self._score_domain_for_replay(fitted_domain)
-            selected, eligible = select_topk_replay_records(
-                scored,
-                topk_per_class=int(self.replay_cfg.TOPK_PER_CLASS),
-                student_threshold=float(self.replay_cfg.STUDENT_THRESHOLD),
-                clip_threshold=float(self.replay_cfg.CLIP_THRESHOLD),
-            )
-            if bool(self.replay_cfg.ENABLED):
-                self.replay_records.extend(selected)
-            self._write_bank_audit(
+            self._finalize_fitted_stage(
                 self._active_stage,
                 fitted_domain,
-                selected,
-                eligible,
-                len(scored),
-                prior_bank_stability,
+                global_step,
+                add_to_bank=True,
             )
             print(f"Evaluate all targets at the end of stage {self._active_stage + 1}")
             self.test()
@@ -450,6 +901,12 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             self._stage_replay_images_seen += int(batch["label"].numel())
             return batch
         except StopIteration:
+            if self.replay_traversal == "cycle":
+                self.replay_iterator = iter(self.replay_loader)
+                batch = next(self.replay_iterator)
+                self._stage_replay_batches_seen += 1
+                self._stage_replay_images_seen += int(batch["label"].numel())
+                return batch
             self.replay_iterator = None
             print(
                 "Replay traversal exhausted for current stage after "
@@ -579,22 +1036,12 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             final_domain = self.curriculum_order[self._active_stage]
             total_steps = self.max_epoch * self.num_batches
             self._write_stage_audit(self._active_stage, final_domain, total_steps)
-            prior_bank_stability = self._measure_bank_stability()
             print(f"Scoring final fitted domain for audit only: {final_domain}")
-            scored = self._score_domain_for_replay(final_domain)
-            selected, eligible = select_topk_replay_records(
-                scored,
-                topk_per_class=int(self.replay_cfg.TOPK_PER_CLASS),
-                student_threshold=float(self.replay_cfg.STUDENT_THRESHOLD),
-                clip_threshold=float(self.replay_cfg.CLIP_THRESHOLD),
-            )
-            self._write_bank_audit(
+            self._finalize_fitted_stage(
                 self._active_stage,
                 final_domain,
-                selected,
-                eligible,
-                len(scored),
-                prior_bank_stability,
+                total_steps,
+                add_to_bank=False,
             )
             self._active_stage = None
         super().after_train()

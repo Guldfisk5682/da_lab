@@ -278,6 +278,15 @@ def extend_cfg(cfg):
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.STUDENT_THRESHOLD = 0.7
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.CLIP_THRESHOLD = 0.7
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.LAMBDA = 1.0
+    # Diagnostic controls are deliberately inert by default. ``online`` +
+    # ``pseudo`` + ``one_pass`` exactly preserves the original replay path.
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.SELECTION_MODE = "online"
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.LABEL_SOURCE = "pseudo"
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.MANIFEST_PATH = ""
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.TRAVERSAL = "one_pass"
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.DIAGNOSTICS = CN()
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.DIAGNOSTICS.ENABLED = False
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.DIAGNOSTICS.AUDIT_ALL_DOMAINS = True
 
     # Diagnostic-only switch. When enabled, MTDA trainers evaluate target
     # domains after every epoch to expose accuracy curves; normal experiments

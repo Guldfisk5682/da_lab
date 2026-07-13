@@ -61,3 +61,11 @@ TRAINER:
         STUDENT_THRESHOLD: 0.7
         CLIP_THRESHOLD: 0.7
         LAMBDA: 1.0
+        # Diagnostic-only alternatives. Defaults reproduce the original run.
+        SELECTION_MODE: "online" # online | oracle_correct | manifest
+        LABEL_SOURCE: "pseudo" # pseudo | ground_truth
+        MANIFEST_PATH: ""
+        TRAVERSAL: "one_pass" # one_pass | cycle
+      DIAGNOSTICS:
+        ENABLED: false
+        AUDIT_ALL_DOMAINS: true

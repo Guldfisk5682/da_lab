@@ -3,18 +3,29 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from trainers.maple_curriculum_mtda import (
+    CurriculumContinuousSharedProjMaPLeMTDA,
+    load_replay_manifest,
+    materialize_manifest_records,
     select_topk_replay_records,
     stage_local_schedule_index,
 )
 
 
-def _record(name, student_label, student_conf, clip_label=None, clip_conf=0.9):
+def _record(
+    name,
+    student_label,
+    student_conf,
+    clip_label=None,
+    clip_conf=0.9,
+    true_label=None,
+):
     return {
         "impath": name,
         "student_label": student_label,
         "student_conf": student_conf,
         "clip_label": student_label if clip_label is None else clip_label,
         "clip_conf": clip_conf,
+        "true_label": student_label if true_label is None else true_label,
     }
 
 
@@ -50,6 +61,64 @@ def test_selection_requires_agreement_and_both_thresholds_without_backfill():
     )
     assert eligible == 1
     assert [record["impath"] for record in selected] == ["valid"]
+
+
+def test_oracle_correct_selection_prioritizes_correct_before_confidence():
+    records = [
+        _record("wrong-high", 0, 0.99, true_label=1),
+        _record("correct-low", 0, 0.75, true_label=0),
+    ]
+    selected, eligible = select_topk_replay_records(
+        records,
+        topk_per_class=1,
+        student_threshold=0.7,
+        clip_threshold=0.7,
+        prefer_correct=True,
+    )
+    assert eligible == 2
+    assert [record["impath"] for record in selected] == ["correct-low"]
+
+
+def test_manifest_materialization_freezes_indices_and_can_swap_only_labels(tmp_path):
+    manifest_path = tmp_path / "manifest.jsonl"
+    manifest_path.write_text(
+        '{"stage": 0, "fitted_domain": "clipart", "records": '
+        '[{"impath": "x.jpg", "student_label": 2, "pseudo_label": 2}]}\n'
+    )
+    payload = load_replay_manifest(manifest_path)[(0, "clipart")]
+    current = [
+        {
+            "impath": "x.jpg",
+            "domain": "clipart",
+            "domain_id": 1,
+            "dataset_index": 7,
+            "true_label": 4,
+            "student_label": 3,
+            "student_conf": 0.8,
+            "clip_label": 3,
+            "clip_conf": 0.9,
+        }
+    ]
+    pseudo = materialize_manifest_records(payload, current, "pseudo")
+    oracle = materialize_manifest_records(payload, current, "ground_truth")
+    assert pseudo[0]["dataset_index"] == oracle[0]["dataset_index"] == 7
+    assert pseudo[0]["pseudo_label"] == 2
+    assert pseudo[0]["replay_label"] == 2
+    assert oracle[0]["replay_label"] == 4
+
+
+def test_cycle_replay_restarts_loader_instead_of_disabling_it():
+    trainer = object.__new__(CurriculumContinuousSharedProjMaPLeMTDA)
+    batch = {"label": torch.tensor([0, 1])}
+    trainer.replay_loader = [batch]
+    trainer.replay_iterator = iter(trainer.replay_loader)
+    trainer.replay_traversal = "cycle"
+    trainer._stage_replay_batches_seen = 0
+    trainer._stage_replay_images_seen = 0
+    assert trainer._next_replay_batch() is batch
+    assert trainer._next_replay_batch() is batch
+    assert trainer._stage_replay_batches_seen == 2
+    assert trainer._stage_replay_images_seen == 4
 
 
 def test_stage_local_schedule_gives_equal_lr_budget_to_each_virtual_epoch():
