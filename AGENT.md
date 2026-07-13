@@ -756,3 +756,15 @@ output: output/officehome_mtda/maple_cshared_pl03_e2h_noreplay_seed42/A2CPR/seed
 initial measured throughput: about 0.62 sec/step
 initial completion estimate: around 17:27 CST
 ```
+
+Experiment 3 was launched on GPU1 at 2026-07-13 17:06 CST:
+
+```text
+method: maple_cshared_pl03_e2h_topk8replay_seed42
+screen: e2h_replay
+log: logs/maple_cshared_pl03_e2h_topk8replay_seed42_run.log
+output: output/officehome_mtda/maple_cshared_pl03_e2h_topk8replay_seed42/A2CPR/seed42
+order: real_world -> product -> clipart
+replay: Top-K8 per domain x predicted class, lambda 1.0
+initial completion estimate including boundary audits: around 17:42-17:48 CST
+```
