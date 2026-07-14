@@ -1111,3 +1111,40 @@ about 6.0 GiB with no startup exception. The runner retries once and validates
 that each later stage has full cycle gradient coverage, that the recorded scale
 equals actual one-pass reference steps divided by stage steps, and that actual
 and one-pass nominal Replay weight budgets match numerically.
+
+Completion status (2026-07-14 22:14 CST): all four runs completed on their
+first attempts and passed the step-budget validator.
+
+```text
+                       one-pass       normalized cycle   full cycle
+A2CPR seed42 macro:    84.86          84.69 (-0.17)      84.94
+  hardest:             72.35          72.37 (+0.02)      73.24
+A2CPR seed100 macro:   84.17          85.10 (+0.93)      85.17
+  hardest:             71.07          73.59 (+2.52)      73.65
+C2APR seed42 macro:    89.01          88.82 (-0.19)      89.00
+  hardest:             84.67          84.18 (-0.49)      84.84
+C2APR seed100 macro:   88.51          88.23 (-0.27)      88.73
+  hardest:             83.77          83.23 (-0.54)      84.05
+```
+
+Normalized cycle averages only about `+0.07` macro over one-pass, driven by
+A2CPR seed100; it is lower than full cycle in all four cases by `0.25` macro on
+average. Hardest-domain normalized-cycle gain averages `+0.38`, also dominated
+by A2CPR seed100, versus `+0.98` for full cycle. Therefore distributing the
+same nominal Replay coefficient budget throughout a stage is not a stable
+mechanism by itself. Full cycle's larger cumulative constraint is materially
+important, while temporal coverage still has a seed-dependent interaction.
+
+The normalized cumulative weighted Replay loss closely matches one-pass in
+seven of eight later-stage comparisons (ratios about `0.956-1.088`); C2APR
+seed100 stage 2 is `0.811` because model evolution changes the realized raw
+loss despite identical nominal coefficient budgets. This is expected and
+shows why the control matches the predefined optimization coefficient, not a
+post-hoc realized loss target.
+
+Local archives:
+
+```text
+.tmp/agent_handoff/logs/fixedpl_normalized_cycle_20260714/
+.tmp/agent_handoff/results/fixedpl_normalized_cycle_20260714/
+```
