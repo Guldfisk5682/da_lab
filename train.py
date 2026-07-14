@@ -284,6 +284,9 @@ def extend_cfg(cfg):
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.LABEL_SOURCE = "pseudo"
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.MANIFEST_PATH = ""
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.TRAVERSAL = "one_pass"
+    # none | one_pass_steps. The latter is a cycle-only diagnostic that
+    # preserves one-pass's nominal number of replay-weighted optimizer steps.
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.NORMALIZATION = "none"
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.DIAGNOSTICS = CN()
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.DIAGNOSTICS.ENABLED = False
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.DIAGNOSTICS.AUDIT_ALL_DOMAINS = True

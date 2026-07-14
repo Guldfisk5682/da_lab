@@ -8,9 +8,21 @@ from trainers.maple_curriculum_mtda import (
     CurriculumContinuousSharedProjMaPLeMTDA,
     load_replay_manifest,
     materialize_manifest_records,
+    replay_step_budget_scale,
     select_topk_replay_records,
     stage_local_schedule_index,
 )
+
+
+def test_one_pass_step_normalization_matches_actual_replay_update_budget():
+    scale = replay_step_budget_scale("one_pass_steps", 118, 1010)
+    assert scale == pytest.approx(118 / 1010)
+    assert scale * 1010 == pytest.approx(118)
+
+
+def test_replay_step_normalization_caps_reference_at_stage_length():
+    assert replay_step_budget_scale("one_pass_steps", 12, 10) == 1.0
+    assert replay_step_budget_scale("none", 2, 10) == 1.0
 
 
 def _record(

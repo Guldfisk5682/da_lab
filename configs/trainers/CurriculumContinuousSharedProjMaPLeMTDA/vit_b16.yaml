@@ -66,6 +66,7 @@ TRAINER:
         LABEL_SOURCE: "pseudo" # pseudo | ground_truth
         MANIFEST_PATH: ""
         TRAVERSAL: "one_pass" # one_pass | cycle
+        NORMALIZATION: "none" # none | one_pass_steps
       DIAGNOSTICS:
         ENABLED: false
         AUDIT_ALL_DOMAINS: true

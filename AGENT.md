@@ -1068,3 +1068,27 @@ Local archives:
 .tmp/agent_handoff/logs/fixedpl_cycle_20260714/
 .tmp/agent_handoff/results/fixedpl_cycle_20260714/
 ```
+
+## One-Pass-Step Normalized Cycle (approved 2026-07-14)
+
+The next four-run control keeps the fixed pseudo-label manifest and cycle
+coverage but normalizes only the Replay loss coefficient. At each stage:
+
+```text
+B_s = min(len(replay_loader), stage optimizer steps)
+T_s = stage optimizer steps
+replay loss scale = B_s / T_s
+```
+
+`B_s` is explicitly the number of optimizer steps that would actually receive
+a Replay update under one-pass traversal with the same loader and one-Replay-
+batch-per-step rule. It is not bank size or an approximate repeat count. The
+scale is fixed at stage entry. Source CE, main PL, replay samples, augmentations,
+ordering, optimizer/scheduler state, and total steps remain unchanged.
+
+The new audit records the predicted one-pass update steps, actual cycle Replay
+steps, normalized and counterfactual unnormalized loss totals, effective
+Replay lambda, nominal reference/actual budgets, actual Replay gradient norms,
+and LR-weighted Replay gradient-norm sum. The four intended runs are A2CPR and
+C2APR at seeds 42/100 using the original online baseline manifests. Do not
+modify the main PL branch until this control is complete and analyzed.

@@ -100,6 +100,26 @@ replay batches, total sample exposures, unique samples, cumulative weighted
 replay loss, the sum of per-step replay-gradient norms, and the norm of the
 summed replay-gradient vector.
 
+### Step-budget normalized cycle
+
+The normalized-cycle control keeps replay active at every optimizer step but
+matches one-pass's nominal replay update budget:
+
+```bash
+REPLAY_TRAVERSAL=cycle \
+REPLAY_NORMALIZATION=one_pass_steps \
+... bash scripts/maple_curriculum_mtda/run_officehome_one.sh A 42
+```
+
+At each stage boundary, let `B_s` be the optimizer-step count that the same
+replay loader would actually update under one-pass traversal, and let `T_s` be
+the stage optimizer-step count. Since the trainer consumes at most one replay
+batch per optimizer step, `B_s = min(len(replay_loader), T_s)`. The stage-fixed
+Replay loss scale is `B_s / T_s`. This uses neither bank item count nor an
+approximate repeat count. The audit writes the reference and actual step
+budgets, scale, effective lambda, normalized and counterfactual unnormalized
+loss totals, and LR-weighted replay-gradient strength.
+
 ## 5. Aggregate sample-level audits
 
 ```bash

@@ -161,6 +161,19 @@ def stage_local_schedule_index(local_step, stage_length, virtual_epochs):
     return min(virtual_epochs - 1, local_step * virtual_epochs // stage_length)
 
 
+def replay_step_budget_scale(normalization, one_pass_steps, stage_steps):
+    """Return a stage-fixed scale matching one-pass replay update steps."""
+    if stage_steps <= 0:
+        raise ValueError("stage_steps must be positive")
+    if one_pass_steps < 0:
+        raise ValueError("one_pass_steps must be non-negative")
+    if normalization == "none":
+        return 1.0
+    if normalization != "one_pass_steps":
+        raise ValueError(f"Unknown replay normalization: {normalization}")
+    return min(one_pass_steps, stage_steps) / stage_steps
+
+
 class CustomCurriculumContinuousSharedProjMaPLeMTDA(
     CustomContinuousSharedProjMaPLeMTDA
 ):
@@ -179,6 +192,7 @@ class CustomCurriculumContinuousSharedProjMaPLeMTDA(
         image_u_dict,
         replay_image=None,
         replay_label=None,
+        replay_loss_scale=1.0,
     ):
         outputs = super().forward_train(image_s, label_s, image_u_dict)
         loss_replay = outputs["loss"].new_zeros(())
@@ -193,11 +207,21 @@ class CustomCurriculumContinuousSharedProjMaPLeMTDA(
             )
             self._ensure_finite("curriculum_replay_ce", loss_replay)
 
-        weighted_replay = self.lambda_replay * loss_replay
+        unnormalized_weighted_replay = self.lambda_replay * loss_replay
+        weighted_replay = float(replay_loss_scale) * unnormalized_weighted_replay
         outputs["loss"] = outputs["loss"] + weighted_replay
         self._ensure_finite("curriculum_loss_total", outputs["loss"])
         outputs["loss_replay"] = loss_replay.detach()
+        outputs["unnormalized_weighted_loss_replay"] = (
+            unnormalized_weighted_replay.detach()
+        )
         outputs["weighted_loss_replay"] = weighted_replay.detach()
+        outputs["replay_loss_scale"] = outputs["loss"].new_tensor(
+            float(replay_loss_scale)
+        )
+        outputs["effective_replay_lambda"] = outputs["loss"].new_tensor(
+            self.lambda_replay * float(replay_loss_scale)
+        )
         # Keep the differentiable replay objective private to the trainer. It is
         # removed before scalar logging and is used only by diagnostics to
         # measure the replay branch's own gradient contribution.
@@ -229,9 +253,15 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         selection_mode = str(replay_cfg.SELECTION_MODE).lower()
         label_source = str(replay_cfg.LABEL_SOURCE).lower()
         traversal = str(replay_cfg.TRAVERSAL).lower()
+        normalization = str(replay_cfg.NORMALIZATION).lower()
         assert selection_mode in {"online", "oracle_correct", "manifest"}
         assert label_source in {"pseudo", "ground_truth"}
         assert traversal in {"one_pass", "cycle"}
+        assert normalization in {"none", "one_pass_steps"}
+        if normalization == "one_pass_steps":
+            assert traversal == "cycle", (
+                "one_pass_steps replay normalization requires cycle traversal"
+            )
         if selection_mode == "manifest":
             assert str(replay_cfg.MANIFEST_PATH).strip()
         if selection_mode == "oracle_correct" or label_source == "ground_truth":
@@ -258,6 +288,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self.replay_selection_mode = str(self.replay_cfg.SELECTION_MODE).lower()
         self.replay_label_source = str(self.replay_cfg.LABEL_SOURCE).lower()
         self.replay_traversal = str(self.replay_cfg.TRAVERSAL).lower()
+        self.replay_normalization = str(self.replay_cfg.NORMALIZATION).lower()
         self.diagnostics_enabled = bool(self.diagnostics_cfg.ENABLED)
         self.audit_all_domains = bool(self.diagnostics_cfg.AUDIT_ALL_DOMAINS)
         self.frozen_replay_manifests = None
@@ -274,12 +305,17 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self._stage_target_batches_seen = 0
         self._stage_target_images_seen = 0
         self._stage_weighted_replay_sum = 0.0
+        self._stage_unnormalized_weighted_replay_sum = 0.0
         self._stage_raw_replay_sum = 0.0
         self._stage_replay_path_exposures = Counter()
         self._stage_replay_grad_steps = 0
         self._stage_replay_grad_norm_sum = 0.0
         self._stage_replay_grad_norm_sq_sum = 0.0
+        self._stage_lr_weighted_replay_grad_norm_sum = 0.0
         self._stage_replay_grad_vector_sum = None
+        self._stage_one_pass_replay_steps = 0
+        self._stage_expected_optimizer_steps = 0
+        self._stage_replay_loss_scale = 0.0
         self._stage_scheduler_index = 0
         self._tfm_train = build_transform(self.cfg, is_train=True)
         self._tfm_test = build_transform(self.cfg, is_train=False)
@@ -289,6 +325,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         print(f"Replay selection mode: {self.replay_selection_mode}")
         print(f"Replay label source: {self.replay_label_source}")
         print(f"Replay traversal: {self.replay_traversal}")
+        print(f"Replay normalization: {self.replay_normalization}")
         print(f"Full prediction diagnostics: {self.diagnostics_enabled}")
         if (
             self.replay_selection_mode == "oracle_correct"
@@ -648,7 +685,28 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                 else 0.0
             ),
             "cumulative_raw_replay_loss": self._stage_raw_replay_sum,
+            "cumulative_unnormalized_weighted_replay_loss": (
+                self._stage_unnormalized_weighted_replay_sum
+            ),
             "cumulative_weighted_replay_loss": self._stage_weighted_replay_sum,
+            "replay_normalization": self.replay_normalization,
+            "replay_loss_scale": self._stage_replay_loss_scale,
+            "effective_replay_lambda": (
+                float(self.replay_cfg.LAMBDA) * self._stage_replay_loss_scale
+            ),
+            "one_pass_reference_optimizer_steps": (
+                self._stage_one_pass_replay_steps
+            ),
+            "expected_stage_optimizer_steps": self._stage_expected_optimizer_steps,
+            "nominal_one_pass_replay_weight_budget": (
+                float(self.replay_cfg.LAMBDA)
+                * self._stage_one_pass_replay_steps
+            ),
+            "nominal_actual_replay_weight_budget": (
+                float(self.replay_cfg.LAMBDA)
+                * self._stage_replay_loss_scale
+                * self._stage_replay_batches_seen
+            ),
             "mean_weighted_replay_loss": (
                 self._stage_weighted_replay_sum / self._stage_optimizer_steps
                 if self._stage_optimizer_steps else 0.0
@@ -674,6 +732,9 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                 else 0.0
             ),
             "sum_weighted_replay_gradient_norm": self._stage_replay_grad_norm_sum,
+            "sum_lr_weighted_replay_gradient_norm": (
+                self._stage_lr_weighted_replay_grad_norm_sum
+            ),
             "norm_of_summed_weighted_replay_gradients": accumulated_gradient_norm,
             "reset_optim_per_stage": self.reset_optim_per_stage,
             "stage_virtual_epochs": self.stage_virtual_epochs,
@@ -940,18 +1001,39 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self._stage_target_batches_seen = 0
         self._stage_target_images_seen = 0
         self._stage_weighted_replay_sum = 0.0
+        self._stage_unnormalized_weighted_replay_sum = 0.0
         self._stage_raw_replay_sum = 0.0
         self._stage_replay_path_exposures = Counter()
         self._stage_replay_grad_steps = 0
         self._stage_replay_grad_norm_sum = 0.0
         self._stage_replay_grad_norm_sq_sum = 0.0
+        self._stage_lr_weighted_replay_grad_norm_sum = 0.0
         self._stage_replay_grad_vector_sum = None
         if self.reset_optim_per_stage:
             self._reset_stage_optimizer_scheduler(stage)
         self._build_replay_loader() if bool(self.replay_cfg.ENABLED) else None
+        stage_start, stage_end = self._stage_bounds(stage)
+        self._stage_expected_optimizer_steps = stage_end - stage_start
+        self._stage_one_pass_replay_steps = (
+            min(len(self.replay_loader), self._stage_expected_optimizer_steps)
+            if self.replay_loader is not None
+            else 0
+        )
+        self._stage_replay_loss_scale = (
+            replay_step_budget_scale(
+                self.replay_normalization,
+                self._stage_one_pass_replay_steps,
+                self._stage_expected_optimizer_steps,
+            )
+            if self.replay_loader is not None
+            else 0.0
+        )
         print(
             f"Entering curriculum stage {stage + 1}/{len(self.curriculum_order)}: "
-            f"target={self.curriculum_order[stage]}, replay_items={len(self.replay_records)}"
+            f"target={self.curriculum_order[stage]}, replay_items={len(self.replay_records)}, "
+            f"one_pass_replay_steps={self._stage_one_pass_replay_steps}, "
+            f"stage_steps={self._stage_expected_optimizer_steps}, "
+            f"replay_loss_scale={self._stage_replay_loss_scale:.8f}"
         )
 
     def _next_replay_batch(self):
@@ -1048,6 +1130,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                     image_u,
                     replay_image=replay_image,
                     replay_label=replay_label,
+                    replay_loss_scale=self._stage_replay_loss_scale,
                 )
                 loss = outputs["loss"]
             replay_objective = outputs.pop("_weighted_replay_objective")
@@ -1063,6 +1146,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                 image_u,
                 replay_image=replay_image,
                 replay_label=replay_label,
+                replay_loss_scale=self._stage_replay_loss_scale,
             )
             loss = outputs["loss"]
             replay_objective = outputs.pop("_weighted_replay_objective")
@@ -1073,6 +1157,11 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
 
         summary = {"loss": float(loss.item())}
         summary["weighted_replay_gradient_norm"] = replay_gradient_norm
+        summary["unnormalized_weighted_replay_gradient_norm"] = (
+            replay_gradient_norm / self._stage_replay_loss_scale
+            if self._stage_replay_loss_scale > 0.0
+            else 0.0
+        )
         for key, value in outputs.items():
             if key != "loss":
                 summary[key] = value.item() if torch.is_tensor(value) else float(value)
@@ -1119,7 +1208,14 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             self._stage_weighted_replay_sum += loss_summary[
                 "weighted_loss_replay"
             ]
+            self._stage_unnormalized_weighted_replay_sum += loss_summary[
+                "unnormalized_weighted_loss_replay"
+            ]
             self._stage_raw_replay_sum += loss_summary["loss_replay"]
+            self._stage_lr_weighted_replay_grad_norm_sum += (
+                self.get_current_lr()
+                * loss_summary["weighted_replay_gradient_norm"]
+            )
             self._update_stage_local_scheduler(stage)
             batch_time.update(time.time() - end)
             losses.update(loss_summary)
