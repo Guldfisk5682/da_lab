@@ -1148,3 +1148,27 @@ Local archives:
 .tmp/agent_handoff/logs/fixedpl_normalized_cycle_20260714/
 .tmp/agent_handoff/results/fixedpl_normalized_cycle_20260714/
 ```
+
+## Limited Full-Cycle Replay-Weight Pilot (approved 2026-07-14)
+
+Replay mechanism work is now capped. The first phase tests only full-cycle
+fixed-PL Replay weights `0.5` and `0.75` on A2CPR/C2APR seed100. Everything
+else, including the original baseline manifests, Top-K8 bank, H2E order,
+stateful optimizer/scheduler, diagnostics, and main PL branch, remains fixed.
+
+```text
+Started: 2026-07-14 23:40 CST
+Remote worktree: ~/workspace/da_lab_diag_20260714
+GPU/screen: GPU1 / replay_weight
+Order: A100 lambda0.5 -> A100 lambda0.75 -> C100 lambda0.5 -> C100 lambda0.75
+Logs: logs/replay_weight_pilot_20260714/
+State: results/replay_weight_pilot_20260714/
+Initial ETA: 2026-07-15 02:30-02:50 CST
+```
+
+The first run was confirmed active at about 6.0 GiB with no startup error. If
+one weight clearly dominates hardest retention, easy-domain tradeoff, worst
+case, and macro behavior, confirm only that weight on A42/C42 (six runs total).
+If results cross, do not expand the sweep: retain the simplest robust existing
+choice and move immediately to the main PL redesign. Replay bank/selection
+hyperparameters are out of scope for further tuning.
