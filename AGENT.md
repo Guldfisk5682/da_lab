@@ -979,5 +979,32 @@ steps in stage 2 and 240/1010 in stage 3. Therefore a fixed-index GT-label
 oracle that does not improve performance only rules out label noise under the
 current sparse exposure; it does not by itself prove prompt-capacity failure.
 
-Do not pull this diagnostic commit or launch diagnostic experiments on the
-remote training server until the user explicitly approves it.
+The earlier restriction on remote diagnostic runs was lifted by the user. The
+full diagnostic matrix completed in the isolated remote worktree
+`~/workspace/da_lab_diag_20260714` before the control below was approved.
+
+## Fixed-PL Cycle Control (approved 2026-07-14)
+
+The user approved the missing `fixed pseudo-label + cycle` control for A2CPR
+and C2APR at seeds 42/100. It must load the original online baseline manifest,
+retain pseudo labels, Top-K8, H2E order, stateful optimizer/scheduler, total
+steps, and all other settings; only replay traversal changes from one pass to
+cycle.
+
+The stage audit now additionally records:
+
+```text
+replay batches and total sample exposures
+unique replay samples and per-sample exposure min/mean/max
+raw and weighted replay-loss cumulative sums
+mean weighted replay loss over all steps and active steps
+mean/RMS/sum of replay-only weighted gradient norms
+norm of the summed replay-only gradient vector
+```
+
+Replay-only gradient auditing is active only with diagnostics enabled. These
+statistics are intended to distinguish benefits from persistent sample
+presence versus a larger accumulated replay constraint. The decisive accuracy
+comparison remains fixed-PL cycle versus fixed-PL one-pass; compare its gap to
+the existing fixed-GT cycle versus fixed-GT one-pass gap to measure whether
+repeated pseudo-label errors erase the exposure benefit.

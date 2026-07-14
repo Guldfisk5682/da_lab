@@ -1,3 +1,5 @@
+from collections import Counter
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -109,16 +111,38 @@ def test_manifest_materialization_freezes_indices_and_can_swap_only_labels(tmp_p
 
 def test_cycle_replay_restarts_loader_instead_of_disabling_it():
     trainer = object.__new__(CurriculumContinuousSharedProjMaPLeMTDA)
-    batch = {"label": torch.tensor([0, 1])}
+    batch = {"label": torch.tensor([0, 1]), "impath": ["a.jpg", "b.jpg"]}
     trainer.replay_loader = [batch]
     trainer.replay_iterator = iter(trainer.replay_loader)
     trainer.replay_traversal = "cycle"
     trainer._stage_replay_batches_seen = 0
     trainer._stage_replay_images_seen = 0
+    trainer._stage_replay_path_exposures = Counter()
     assert trainer._next_replay_batch() is batch
     assert trainer._next_replay_batch() is batch
     assert trainer._stage_replay_batches_seen == 2
     assert trainer._stage_replay_images_seen == 4
+    assert trainer._stage_replay_path_exposures == {"a.jpg": 2, "b.jpg": 2}
+
+
+def test_replay_gradient_audit_measures_only_weighted_replay_objective():
+    trainer = object.__new__(CurriculumContinuousSharedProjMaPLeMTDA)
+    parameter = torch.nn.Parameter(torch.tensor([3.0, 4.0]))
+    trainer.model = torch.nn.Module()
+    trainer.model.register_parameter("prompt", parameter)
+    trainer.diagnostics_enabled = True
+    trainer._stage_replay_grad_steps = 0
+    trainer._stage_replay_grad_norm_sum = 0.0
+    trainer._stage_replay_grad_norm_sq_sum = 0.0
+    trainer._stage_replay_grad_vector_sum = None
+
+    norm = trainer._measure_replay_gradient((parameter**2).sum())
+
+    assert norm == pytest.approx(10.0)
+    assert trainer._stage_replay_grad_steps == 1
+    assert trainer._stage_replay_grad_norm_sum == pytest.approx(10.0)
+    accumulated = next(iter(trainer._stage_replay_grad_vector_sum.values()))
+    assert torch.equal(accumulated, torch.tensor([6.0, 8.0]))
 
 
 def test_stage_local_schedule_gives_equal_lr_budget_to_each_virtual_epoch():

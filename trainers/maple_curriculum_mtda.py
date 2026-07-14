@@ -11,7 +11,7 @@ import json
 import os
 import random
 import time
-from collections import OrderedDict, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 
 import numpy as np
 import torch
@@ -198,6 +198,10 @@ class CustomCurriculumContinuousSharedProjMaPLeMTDA(
         self._ensure_finite("curriculum_loss_total", outputs["loss"])
         outputs["loss_replay"] = loss_replay.detach()
         outputs["weighted_loss_replay"] = weighted_replay.detach()
+        # Keep the differentiable replay objective private to the trainer. It is
+        # removed before scalar logging and is used only by diagnostics to
+        # measure the replay branch's own gradient contribution.
+        outputs["_weighted_replay_objective"] = weighted_replay
         outputs["replay_accuracy"] = replay_accuracy.detach()
         outputs["replay_active"] = outputs["loss"].new_tensor(
             float(replay_image is not None)
@@ -270,6 +274,12 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self._stage_target_batches_seen = 0
         self._stage_target_images_seen = 0
         self._stage_weighted_replay_sum = 0.0
+        self._stage_raw_replay_sum = 0.0
+        self._stage_replay_path_exposures = Counter()
+        self._stage_replay_grad_steps = 0
+        self._stage_replay_grad_norm_sum = 0.0
+        self._stage_replay_grad_norm_sq_sum = 0.0
+        self._stage_replay_grad_vector_sum = None
         self._stage_scheduler_index = 0
         self._tfm_train = build_transform(self.cfg, is_train=True)
         self._tfm_test = build_transform(self.cfg, is_train=False)
@@ -606,6 +616,14 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self._write_jsonl_many("pl_sample_audit.jsonl", payloads)
 
     def _write_stage_audit(self, stage, domain_name, global_step):
+        exposure_counts = list(self._stage_replay_path_exposures.values())
+        accumulated_gradient_norm = 0.0
+        if self._stage_replay_grad_vector_sum:
+            squared_norm = sum(
+                float(vector.float().pow(2).sum().item())
+                for vector in self._stage_replay_grad_vector_sum.values()
+            )
+            accumulated_gradient_norm = squared_norm**0.5
         audit = {
             "stage": stage,
             "domain": domain_name,
@@ -615,10 +633,48 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             "target_images": self._stage_target_images_seen,
             "replay_batches": self._stage_replay_batches_seen,
             "replay_images": self._stage_replay_images_seen,
+            "replay_sample_exposures": self._stage_replay_images_seen,
+            "replay_unique_samples_seen": len(self._stage_replay_path_exposures),
+            "replay_bank_unique_samples": len(self.replay_records),
+            "replay_exposures_per_seen_sample_min": (
+                min(exposure_counts) if exposure_counts else 0
+            ),
+            "replay_exposures_per_seen_sample_max": (
+                max(exposure_counts) if exposure_counts else 0
+            ),
+            "replay_exposures_per_seen_sample_mean": (
+                self._stage_replay_images_seen / len(exposure_counts)
+                if exposure_counts
+                else 0.0
+            ),
+            "cumulative_raw_replay_loss": self._stage_raw_replay_sum,
+            "cumulative_weighted_replay_loss": self._stage_weighted_replay_sum,
             "mean_weighted_replay_loss": (
                 self._stage_weighted_replay_sum / self._stage_optimizer_steps
                 if self._stage_optimizer_steps else 0.0
             ),
+            "mean_weighted_replay_loss_when_active": (
+                self._stage_weighted_replay_sum / self._stage_replay_batches_seen
+                if self._stage_replay_batches_seen
+                else 0.0
+            ),
+            "replay_gradient_steps": self._stage_replay_grad_steps,
+            "mean_weighted_replay_gradient_norm": (
+                self._stage_replay_grad_norm_sum / self._stage_replay_grad_steps
+                if self._stage_replay_grad_steps
+                else 0.0
+            ),
+            "rms_weighted_replay_gradient_norm": (
+                (
+                    self._stage_replay_grad_norm_sq_sum
+                    / self._stage_replay_grad_steps
+                )
+                ** 0.5
+                if self._stage_replay_grad_steps
+                else 0.0
+            ),
+            "sum_weighted_replay_gradient_norm": self._stage_replay_grad_norm_sum,
+            "norm_of_summed_weighted_replay_gradients": accumulated_gradient_norm,
             "reset_optim_per_stage": self.reset_optim_per_stage,
             "stage_virtual_epochs": self.stage_virtual_epochs,
         }
@@ -884,6 +940,12 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self._stage_target_batches_seen = 0
         self._stage_target_images_seen = 0
         self._stage_weighted_replay_sum = 0.0
+        self._stage_raw_replay_sum = 0.0
+        self._stage_replay_path_exposures = Counter()
+        self._stage_replay_grad_steps = 0
+        self._stage_replay_grad_norm_sum = 0.0
+        self._stage_replay_grad_norm_sq_sum = 0.0
+        self._stage_replay_grad_vector_sum = None
         if self.reset_optim_per_stage:
             self._reset_stage_optimizer_scheduler(stage)
         self._build_replay_loader() if bool(self.replay_cfg.ENABLED) else None
@@ -899,6 +961,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             batch = next(self.replay_iterator)
             self._stage_replay_batches_seen += 1
             self._stage_replay_images_seen += int(batch["label"].numel())
+            self._record_replay_paths(batch)
             return batch
         except StopIteration:
             if self.replay_traversal == "cycle":
@@ -906,6 +969,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                 batch = next(self.replay_iterator)
                 self._stage_replay_batches_seen += 1
                 self._stage_replay_images_seen += int(batch["label"].numel())
+                self._record_replay_paths(batch)
                 return batch
             self.replay_iterator = None
             print(
@@ -914,6 +978,53 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                 "until the next stage."
             )
             return None
+
+    def _record_replay_paths(self, batch):
+        paths = batch.get("impath")
+        if paths is None:
+            return
+        if isinstance(paths, str):
+            paths = [paths]
+        self._stage_replay_path_exposures.update(str(path) for path in paths)
+
+    def _measure_replay_gradient(self, replay_objective):
+        """Measure the weighted replay term's gradient without touching .grad."""
+        if not self.diagnostics_enabled or not replay_objective.requires_grad:
+            return 0.0
+        parameters = [
+            parameter for parameter in self.model.parameters() if parameter.requires_grad
+        ]
+        gradients = torch.autograd.grad(
+            replay_objective,
+            parameters,
+            retain_graph=True,
+            allow_unused=True,
+        )
+        present = {
+            index: gradient.detach().float()
+            for index, gradient in enumerate(gradients)
+            if gradient is not None
+        }
+        if not present:
+            return 0.0
+        squared_norm = sum(
+            float(gradient.pow(2).sum().item()) for gradient in present.values()
+        )
+        gradient_norm = squared_norm**0.5
+        if self._stage_replay_grad_vector_sum is None:
+            self._stage_replay_grad_vector_sum = {
+                index: gradient.clone() for index, gradient in present.items()
+            }
+        else:
+            for index, gradient in present.items():
+                if index not in self._stage_replay_grad_vector_sum:
+                    self._stage_replay_grad_vector_sum[index] = gradient.clone()
+                else:
+                    self._stage_replay_grad_vector_sum[index].add_(gradient)
+        self._stage_replay_grad_steps += 1
+        self._stage_replay_grad_norm_sum += gradient_norm
+        self._stage_replay_grad_norm_sq_sum += squared_norm
+        return gradient_norm
 
     def forward_backward(self, batch_x, batch_u, replay_batch=None):
         image_x, label_x, image_u = self.parse_batch_train(batch_x, batch_u)
@@ -939,6 +1050,8 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                     replay_label=replay_label,
                 )
                 loss = outputs["loss"]
+            replay_objective = outputs.pop("_weighted_replay_objective")
+            replay_gradient_norm = self._measure_replay_gradient(replay_objective)
             self.optim.zero_grad()
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optim)
@@ -952,11 +1065,14 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                 replay_label=replay_label,
             )
             loss = outputs["loss"]
+            replay_objective = outputs.pop("_weighted_replay_objective")
+            replay_gradient_norm = self._measure_replay_gradient(replay_objective)
             self.optim.zero_grad()
             loss.backward()
             self.optim.step()
 
         summary = {"loss": float(loss.item())}
+        summary["weighted_replay_gradient_norm"] = replay_gradient_norm
         for key, value in outputs.items():
             if key != "loss":
                 summary[key] = value.item() if torch.is_tensor(value) else float(value)
@@ -1003,6 +1119,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             self._stage_weighted_replay_sum += loss_summary[
                 "weighted_loss_replay"
             ]
+            self._stage_raw_replay_sum += loss_summary["loss_replay"]
             self._update_stage_local_scheduler(stage)
             batch_time.update(time.time() - end)
             losses.update(loss_summary)

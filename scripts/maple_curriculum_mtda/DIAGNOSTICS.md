@@ -14,7 +14,9 @@ With `DIAGNOSTICS_ENABLED=True`, a curriculum run writes:
   target sample at every stage boundary;
 - `replay_bank_audit.jsonl`: aggregate candidate/selected precision, shared
   teacher-student errors, predicted/true class coverage and oracle shortfall;
-- `curriculum_stage_audit.jsonl`: replay exposure and weighted loss per stage.
+- `curriculum_stage_audit.jsonl`: replay batch/sample exposure, unique-bank
+  coverage, cumulative weighted loss, and replay-only gradient strength per
+  stage. Gradient auditing is enabled only when diagnostics are enabled.
 
 Extra all-domain scoring preserves and restores Python, NumPy, Torch and CUDA
 RNG states so diagnostics do not change the subsequent training stream.
@@ -80,6 +82,23 @@ REPLAY_LABEL_SOURCE=ground_truth \
 REPLAY_TRAVERSAL=cycle \
 ... bash scripts/maple_curriculum_mtda/run_officehome_one.sh A 42
 ```
+
+For a deployable pseudo-label cycle control, keep the baseline manifest and
+pseudo labels fixed while changing only traversal:
+
+```bash
+REPLAY_SELECTION_MODE=manifest \
+REPLAY_LABEL_SOURCE=pseudo \
+REPLAY_TRAVERSAL=cycle \
+REPLAY_MANIFEST_PATH=/absolute/baseline/run/replay_selection_manifest.jsonl \
+DIAGNOSTICS_ENABLED=True \
+... bash scripts/maple_curriculum_mtda/run_officehome_one.sh A 42
+```
+
+The stage audit distinguishes replay amount from optimization strength through
+replay batches, total sample exposures, unique samples, cumulative weighted
+replay loss, the sum of per-step replay-gradient norms, and the norm of the
+summed replay-gradient vector.
 
 ## 5. Aggregate sample-level audits
 
