@@ -1092,3 +1092,22 @@ Replay lambda, nominal reference/actual budgets, actual Replay gradient norms,
 and LR-weighted Replay gradient-norm sum. The four intended runs are A2CPR and
 C2APR at seeds 42/100 using the original online baseline manifests. Do not
 modify the main PL branch until this control is complete and analyzed.
+
+Launch status:
+
+```text
+Started: 2026-07-14 19:25 CST
+Remote code/worktree: 699ddf7 / ~/workspace/da_lab_diag_20260714
+GPU/screen: GPU1 / normalized_cycle
+Order: A2CPR seed42 -> A2CPR seed100 -> C2APR seed42 -> C2APR seed100
+Method tags: maple_diag_fixed_pl_normalized_cycle_gradstats_seed{42,100}
+Logs: logs/fixedpl_normalized_cycle_20260714/
+State: results/fixedpl_normalized_cycle_20260714/
+Initial ETA: 2026-07-14 22:15-22:30 CST
+```
+
+GPU1 passed the real allocation check and the first run was confirmed active at
+about 6.0 GiB with no startup exception. The runner retries once and validates
+that each later stage has full cycle gradient coverage, that the recorded scale
+equals actual one-pass reference steps divided by stage steps, and that actual
+and one-pass nominal Replay weight budgets match numerically.
