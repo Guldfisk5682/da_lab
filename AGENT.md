@@ -1008,3 +1008,24 @@ presence versus a larger accumulated replay constraint. The decisive accuracy
 comparison remains fixed-PL cycle versus fixed-PL one-pass; compare its gap to
 the existing fixed-GT cycle versus fixed-GT one-pass gap to measure whether
 repeated pseudo-label errors erase the exposure benefit.
+
+Launch status:
+
+```text
+Started: 2026-07-14 16:15 CST
+Remote worktree: ~/workspace/da_lab_diag_20260714
+Remote code: 4fc1ac7
+GPU: 1
+Screen: fixedpl_cycle
+Order: A2CPR seed42 -> A2CPR seed100 -> C2APR seed42 -> C2APR seed100
+Method tags: maple_diag_fixed_pl_cycle_gradstats_seed{42,100}
+Logs: logs/fixedpl_cycle_20260714/
+State/results: results/fixedpl_cycle_20260714/
+Initial ETA for all four sequential runs: 2026-07-14 19:30-20:00 CST
+```
+
+GPU0 was not used because an unrelated process held about 8.6 GiB. GPU1 passed
+a real PyTorch allocation test and the first A2CPR seed42 run was confirmed
+active at about 6.0 GiB before handoff. The runner validates final target
+metrics, epoch-5 checkpoint, three stage-audit rows, required new fields, and
+full replay-gradient coverage in stages 2/3; it retries a failed run once.
