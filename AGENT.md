@@ -1029,3 +1029,42 @@ a real PyTorch allocation test and the first A2CPR seed42 run was confirmed
 active at about 6.0 GiB before handoff. The runner validates final target
 metrics, epoch-5 checkpoint, three stage-audit rows, required new fields, and
 full replay-gradient coverage in stages 2/3; it retries a failed run once.
+
+Completion status (2026-07-14 19:06 CST): all four runs completed on the first
+attempt and passed validation; no OOM, traceback, NaN, or incomplete audit.
+
+```text
+                       fixed-PL one-pass       fixed-PL cycle         delta
+A2CPR seed42:          72.35/90.94/91.30 84.86 73.24/90.85/90.73 84.94 +0.08
+A2CPR seed100:         71.07/91.24/90.20 84.17 73.65/91.21/90.64 85.17 +1.00
+C2APR seed42:          84.67/91.30/91.07 89.01 84.84/91.26/90.91 89.00 -0.01
+C2APR seed100:         83.77/90.72/91.03 88.51 84.05/91.10/91.05 88.73 +0.23
+```
+
+Hardest-domain cycle gains are `+0.89, +2.58, +0.17, +0.28`, positive in all
+four cases and `+0.98` on average. Macro gain is `+0.32` on average. Compared
+with GT cycle, pseudo-label cycle is lower by about `0.14` macro on average,
+so repeated pseudo-label errors impose a modest cost but do not erase the
+benefit of persistent replay exposure. This shifts the primary diagnosis
+toward insufficient replay duration in one-pass; replay label quality remains
+a secondary issue.
+
+Cycle provides 1010 replay batches / 4040 image exposures in each later stage,
+versus 117-119 batches in stage 2 and 245-247 in stage 3 for one-pass. Cycle
+increases cumulative weighted replay loss by about `6.4-7.8x` in stage 2 and
+`3.5-3.9x` in stage 3. Its loss grows sublinearly because mean loss per active
+batch falls with repeated fitting. The norm of the summed replay-gradient
+vector is only about `5.5-8.3%` of the sum of per-step gradient norms, so the
+repeated gradients are not simply identical and perfectly aligned; do not
+interpret this ratio as a direct conflict metric because parameters and data
+augmentations change across steps.
+
+This experiment does not by itself separate persistent temporal coverage from
+larger cumulative constraint strength, since cycle changes both. Use these
+audits to design a budget/frequency control before claiming the mechanism.
+Local archives:
+
+```text
+.tmp/agent_handoff/logs/fixedpl_cycle_20260714/
+.tmp/agent_handoff/results/fixedpl_cycle_20260714/
+```
