@@ -1237,3 +1237,70 @@ gradient norms and cosines. At initialization and every stage boundary, write
 full-dataset per-sample teacher, student, mixture, hard/soft selection, true
 probability, correctness, and confidence records. These labels must never
 affect target construction or optimization.
+
+Completion and diagnosis (2026-07-15): all four seed100 runs completed without
+exceptions. The controlled results are:
+
+```text
+                         agreement-hard        hard + disagreement-soft
+A2CPR C/P/R:             74.02/91.53/90.68     74.14/91.33/90.38
+A2CPR macro:             85.41                  85.28 (-0.13)
+C2APR A/P/R:             84.14/91.53/90.41     83.85/91.42/90.41
+C2APR macro:             88.69                  88.56 (-0.13)
+```
+
+The initial-student concern was empirically rejected for this backbone. Before
+training, frozen CLIP and the prompt student agree on `98.50%` of A targets and
+`99.07%` of C targets. In the first 50 augmented training steps, hard PL is
+active in every step, covers `33.67%/54.83%` of target samples, and is
+`90.10%/92.10%` correct. This follows from the text-context initialization and
+near-CLIP initial model, despite randomly initialized trainable projections.
+
+Agreement-hard is the useful part of the redesign. Across the complete run it
+covers `54.29%/61.69%` of training samples at `95.60%/96.31%` true accuracy.
+On deterministic boundary views it covers about `68-79%` at `95.7-98.1%`
+accuracy. The old clean-PL counterfactual gate covers only about `0.7-4.9%` at
+roughly `65-76%` accuracy because it requires confident CLIP and a low-
+confidence student. Relative to the locked lambda-0.75 Replay baseline,
+agreement-hard changes macro by `+0.26/-0.01` on A/C and hardest accuracy by
+`-0.02/+0.04`; it is a substantially healthier PL signal but not yet a stable
+hardest-domain improvement.
+
+The symmetric disagreement-soft branch is not viable as implemented. It
+covers only `0.24%/0.27%` of training samples and appears in `88/97` of 3030
+steps, with mixture-argmax accuracy only `53.93%/60.61%`. By stage, its loss
+sum grows from `0.7-2.4%` of hard loss in stage 1 to `19.9-20.8%` in the final
+stage, because independent selected-count normalization gives even one rare
+soft sample a full branch coefficient. The target entropy contributes to raw
+loss magnitude, but the four audit steps that actually contain soft samples
+also show soft gradient norms `1.29-2.11`, versus simultaneous hard norms
+`0.11-1.08`; three of four soft-hard cosine measurements are negative. The
+gradient evidence is directionally important but sparse because periodic
+50-step audits hit only four rare soft-active steps.
+
+Full-boundary diagnosis explains the low quality. Among post-initialization
+high-confidence disagreements, student top-1 is correct on `72.65%/60.14%`
+for A/C, frozen CLIP only `23.08%/35.14%`, and their symmetric mixture only
+`56.41%/60.81%`. Thus adaptation has made the student the better expert on
+these disagreements, especially for A, and averaging reintroduces frozen-CLIP
+bias. Choosing the higher-confidence model is not a sufficient fix because
+confidence scales are not calibrated across models: it reaches only
+`59.0%/62.8%`. A confidence-gap of 0.15 reaches `85.2%/78.0%` but retains only
+`23.1%/27.7%` of an already tiny candidate set. Temporal student-label
+stability also does not make C disagreements reliable enough.
+
+The negative effect is already visible after stage 1, before Replay is active:
+hard+soft trails hard-only macro by `0.07/0.06` on A/C. Later Replay banks have
+nearly identical sizes and pseudo-label accuracy, but their path Jaccard falls
+to `0.66-0.75` on A and `0.80-0.93` on C, so later-stage differences include a
+real downstream Replay interaction. This does not explain the clean stage-1
+negative result.
+
+Decision: retain agreement-hard as the new PL baseline and discontinue the
+current symmetric mean soft target. Do not tune beta on this branch: its
+candidate semantics are wrong, not merely its scalar weight. Before another
+training run, use the existing diagnostics to design an asymmetric or
+calibrated disagreement rule. Any replacement must demonstrate offline
+candidate accuracy materially closer to agreement-hard, and rare branches
+must use an explicit update budget or sample-count-aware coefficient so one
+uncertain sample cannot silently receive a full auxiliary-loss branch.
