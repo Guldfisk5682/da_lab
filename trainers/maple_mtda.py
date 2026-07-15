@@ -1,6 +1,7 @@
 import copy
 import math
 import os.path as osp
+from collections import OrderedDict
 
 import torch
 import torch.nn as nn
@@ -10,11 +11,12 @@ from torch.nn import functional as F
 from clip import clip
 from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
 from dassl.engine import TRAINER_REGISTRY
+from dassl.data.transforms import build_transform
 from dassl.optim import build_lr_scheduler, build_optimizer
 
 from trainers.checkpoint_utils import load_checkpoint_compat, load_state_dict_checked
 from trainers.cocoop import load_clip_to_cpu as load_base_clip_to_cpu
-from trainers.mtda_base import MultiTargetTrainerXU
+from trainers.mtda_base import MultiTargetDataManager, MultiTargetTrainerXU
 
 _tokenizer = _Tokenizer()
 
@@ -200,6 +202,7 @@ class CustomMaPLeMTDA(nn.Module):
         self.pl_use_student_low_conf_mask = bool(
             maple_cfg.PL_USE_STUDENT_LOW_CONF_MASK
         )
+        self._init_dual_pl_config(maple_cfg)
         self._init_weak_pl_config(maple_cfg)
         self._init_self_distill_config(maple_cfg)
         self.debug_print_once = bool(maple_cfg.DEBUG.PRINT_ONCE)
@@ -225,6 +228,12 @@ class CustomMaPLeMTDA(nn.Module):
             f"{log_prefix} pseudo-label low-conf only: "
             f"{self.pl_use_student_low_conf_mask}"
         )
+        print(f"{log_prefix} pseudo-label variant: {self.pl_variant}")
+        print(
+            f"{log_prefix} dual-confidence threshold: "
+            f"{self.pl_dual_conf_threshold}"
+        )
+        print(f"{log_prefix} soft pseudo-label beta: {self.pl_soft_beta}")
         print(f"{log_prefix} weak PL enabled: {self.weak_pl_enabled}")
         print(f"{log_prefix} weak PL weight: {self.lambda_weak_pl}")
         print(
@@ -258,6 +267,11 @@ class CustomMaPLeMTDA(nn.Module):
     def _ensure_finite(name, tensor):
         if not torch.isfinite(tensor).all():
             raise FloatingPointError(f"Non-finite values detected in {name}")
+
+    def _init_dual_pl_config(self, maple_cfg):
+        self.pl_variant = str(maple_cfg.PL_VARIANT).lower()
+        self.pl_dual_conf_threshold = float(maple_cfg.PL_DUAL_CONF_THRESHOLD)
+        self.pl_soft_beta = float(maple_cfg.PL_SOFT_BETA)
 
     def _init_weak_pl_config(self, maple_cfg):
         weak_cfg = maple_cfg.WEAK_PL
@@ -399,6 +413,166 @@ class CustomMaPLeMTDA(nn.Module):
             "agreement": (student_label == reference_label).float().mean(),
         }
         return loss, stats
+
+    def _dual_view_pseudo_label_terms(
+        self,
+        strong_logits,
+        student_weak_logits,
+        reference_weak_logits,
+        true_label=None,
+    ):
+        """Build detached hard/soft targets on weak views and score strong views."""
+        teacher_probs = F.softmax(reference_weak_logits.detach().float(), dim=-1)
+        student_probs = F.softmax(student_weak_logits.detach().float(), dim=-1)
+        teacher_conf, teacher_label = teacher_probs.max(dim=-1)
+        student_conf, student_label = student_probs.max(dim=-1)
+
+        high_conf = teacher_conf.ge(self.pl_dual_conf_threshold) & student_conf.ge(
+            self.pl_dual_conf_threshold
+        )
+        agreement = teacher_label.eq(student_label)
+        hard_mask = high_conf & agreement
+        soft_mask = high_conf & ~agreement
+        if self.pl_variant == "agreement_hard":
+            soft_mask = torch.zeros_like(soft_mask)
+
+        hard_per_sample = F.cross_entropy(
+            strong_logits.float(), teacher_label, reduction="none"
+        )
+        soft_target = (0.5 * (teacher_probs + student_probs)).detach()
+        soft_per_sample = -(
+            soft_target * F.log_softmax(strong_logits.float(), dim=-1)
+        ).sum(dim=-1)
+        hard_sum = (hard_per_sample * hard_mask.float()).sum()
+        soft_sum = (soft_per_sample * soft_mask.float()).sum()
+
+        # Counterfactual coverage under the old one-teacher PL gate. This does
+        # not affect optimization and makes comparisons with legacy runs direct.
+        old_mask = teacher_conf.ge(self.pl_threshold)
+        if self.pl_use_student_low_conf_mask:
+            old_mask = old_mask & student_conf.lt(self.pl_student_threshold)
+
+        soft_entropy = -(soft_target * (soft_target + 1e-12).log()).sum(dim=-1)
+        result = {
+            "hard_sum": hard_sum,
+            "soft_sum": soft_sum,
+            "hard_count": hard_mask.float().sum(),
+            "soft_count": soft_mask.float().sum(),
+            "high_count": high_conf.float().sum(),
+            "old_count": old_mask.float().sum(),
+            "total_count": strong_logits.new_tensor(float(strong_logits.shape[0])),
+            "teacher_conf_sum": teacher_conf.sum(),
+            "student_conf_sum": student_conf.sum(),
+            "agreement_count": agreement.float().sum(),
+            "soft_entropy_sum": (soft_entropy * soft_mask.float()).sum(),
+        }
+        if true_label is not None:
+            mixture_label = soft_target.argmax(dim=-1)
+            result.update(
+                {
+                    "hard_correct_count": (
+                        teacher_label.eq(true_label) & hard_mask
+                    ).float().sum(),
+                    "soft_correct_count": (
+                        mixture_label.eq(true_label) & soft_mask
+                    ).float().sum(),
+                }
+            )
+        return result
+
+    def _forward_train_dual_pl(self, image_s, label_s, image_u_dict):
+        logits_s = self(image_s)
+        loss_ce = F.cross_entropy(logits_s, label_s)
+        self._ensure_finite("maple_source_ce", loss_ce)
+        lambda_pl_current = self.current_lambda_pl()
+
+        terms = []
+        for views in image_u_dict.values():
+            if not isinstance(views, dict) or not {"weak", "strong"}.issubset(views):
+                raise TypeError(
+                    "Dual-view PL expects each target batch to contain weak/strong views"
+                )
+            weak_image = views["weak"]
+            strong_logits = self(views["strong"])
+            with torch.no_grad():
+                student_weak_logits = self(weak_image)
+                reference_weak_logits = self._compute_reference_logits(weak_image)
+            terms.append(
+                self._dual_view_pseudo_label_terms(
+                    strong_logits,
+                    student_weak_logits,
+                    reference_weak_logits,
+                    true_label=views.get("true_label"),
+                )
+            )
+
+        def total(key):
+            return torch.stack([item[key] for item in terms]).sum()
+
+        hard_count = total("hard_count")
+        soft_count = total("soft_count")
+        total_count = total("total_count").clamp_min(1.0)
+        loss_hard = total("hard_sum") / hard_count.clamp_min(1.0)
+        loss_soft = total("soft_sum") / soft_count.clamp_min(1.0)
+        loss_pl = loss_hard + self.pl_soft_beta * loss_soft
+        loss_total = loss_ce + lambda_pl_current * loss_pl
+        self._ensure_finite("maple_dual_pl_total", loss_total)
+
+        selected_count = hard_count + soft_count
+        outputs = {
+            "loss": loss_total,
+            "source_ce": loss_ce.detach(),
+            "loss_pl": loss_pl.detach(),
+            "loss_pl_hard": loss_hard.detach(),
+            "loss_pl_soft": loss_soft.detach(),
+            "weighted_loss_pl": (lambda_pl_current * loss_pl).detach(),
+            "weighted_loss_pl_hard": (lambda_pl_current * loss_hard).detach(),
+            "weighted_loss_pl_soft": (
+                lambda_pl_current * self.pl_soft_beta * loss_soft
+            ).detach(),
+            "lambda_pl_current": loss_ce.new_tensor(lambda_pl_current),
+            "pl_hard_count": hard_count.detach(),
+            "pl_soft_count": soft_count.detach(),
+            "pl_selected_count": selected_count.detach(),
+            "pl_total_count": total_count.detach(),
+            "pl_hard_coverage": (hard_count / total_count).detach(),
+            "pl_soft_coverage": (soft_count / total_count).detach(),
+            "pl_coverage": (selected_count / total_count).detach(),
+            "pl_dual_high_coverage": (total("high_count") / total_count).detach(),
+            "pl_ignored_coverage": (1.0 - selected_count / total_count).detach(),
+            "pl_original_counterfactual_coverage": (
+                total("old_count") / total_count
+            ).detach(),
+            "pl_clip_conf": (total("teacher_conf_sum") / total_count).detach(),
+            "pl_student_conf": (total("student_conf_sum") / total_count).detach(),
+            "clip_student_agreement": (
+                total("agreement_count") / total_count
+            ).detach(),
+            "pl_soft_target_entropy": (
+                total("soft_entropy_sum") / soft_count.clamp_min(1.0)
+            ).detach(),
+            "pl_hard_active": hard_count.gt(0).float().detach(),
+            "pl_soft_active": soft_count.gt(0).float().detach(),
+            "_source_ce_objective": loss_ce,
+            "_pl_hard_objective": lambda_pl_current * loss_hard,
+            "_pl_soft_objective": (
+                lambda_pl_current * self.pl_soft_beta * loss_soft
+            ),
+        }
+        if "hard_correct_count" in terms[0]:
+            outputs.update(
+                {
+                    "pl_hard_true_accuracy": (
+                        total("hard_correct_count") / hard_count.clamp_min(1.0)
+                    ).detach(),
+                    "pl_hard_correct_count": total("hard_correct_count").detach(),
+                    "pl_soft_argmax_true_accuracy": (
+                        total("soft_correct_count") / soft_count.clamp_min(1.0)
+                    ).detach(),
+                    "pl_soft_correct_count": total("soft_correct_count").detach(),
+                }
+            )
+        return outputs
 
     @torch.no_grad()
     def _update_weak_pl_state(self, domain_name, reference_probs):
@@ -616,6 +790,8 @@ class CustomMaPLeMTDA(nn.Module):
         return loss, stats
 
     def forward_train(self, image_s, label_s, image_u_dict):
+        if self.pl_variant != "legacy":
+            return self._forward_train_dual_pl(image_s, label_s, image_u_dict)
         logits_s = self(image_s)
         loss_ce = F.cross_entropy(logits_s, label_s)
         self._ensure_finite("maple_source_ce", loss_ce)
@@ -1072,6 +1248,15 @@ class MaPLeMTDA(MultiTargetTrainerXU):
         assert maple_cfg.PL_SCHEDULE in ["constant", "cosine"]
         assert 0.0 <= maple_cfg.PL_THRESHOLD <= 1.0
         assert 0.0 <= maple_cfg.PL_STUDENT_THRESHOLD <= 1.0
+        assert str(maple_cfg.PL_VARIANT).lower() in {
+            "legacy",
+            "agreement_hard",
+            "agreement_hard_soft",
+        }
+        assert 0.0 <= float(maple_cfg.PL_DUAL_CONF_THRESHOLD) <= 1.0
+        assert float(maple_cfg.PL_SOFT_BETA) >= 0.0
+        assert int(maple_cfg.PL_DIAGNOSTIC_WINDOW) > 0
+        assert int(maple_cfg.PL_GRAD_AUDIT_INTERVAL) > 0
         assert 0.0 <= maple_cfg.SELF_DISTILL.OLD_CONF_LOW <= 1.0
         assert 0.0 <= maple_cfg.SELF_DISTILL.OLD_CONF_HIGH <= 1.0
         assert maple_cfg.SELF_DISTILL.OLD_CONF_LOW <= maple_cfg.SELF_DISTILL.OLD_CONF_HIGH
@@ -1084,6 +1269,78 @@ class MaPLeMTDA(MultiTargetTrainerXU):
         ]
         assert 0.0 <= maple_cfg.SELF_DISTILL.CLIP_CONF_HIGH <= 1.0
         assert "{}" in maple_cfg.ZS_PROMPT_TEMPLATE
+        if str(maple_cfg.PL_VARIANT).lower() != "legacy":
+            assert not bool(maple_cfg.WEAK_PL.ENABLED), (
+                "Dual-view PL v1 must be isolated from WEAK_PL"
+            )
+            assert not bool(maple_cfg.SELF_DISTILL.ENABLED), (
+                "Dual-view PL v1 must be isolated from SELF_DISTILL"
+            )
+
+    def build_data_loader(self):
+        maple_cfg = self.cfg.TRAINER.MAPLE_MTDA
+        if str(maple_cfg.PL_VARIANT).lower() == "legacy":
+            return super().build_data_loader()
+
+        weak_transform = build_transform(self.cfg, is_train=True)
+        strong_choice = str(maple_cfg.PL_STRONG_AUGMENT).strip()
+        strong_transforms = list(self.cfg.INPUT.TRANSFORMS)
+        if strong_choice and strong_choice not in strong_transforms:
+            normalize_index = (
+                strong_transforms.index("normalize")
+                if "normalize" in strong_transforms
+                else len(strong_transforms)
+            )
+            strong_transforms.insert(normalize_index, strong_choice)
+        strong_transform = build_transform(
+            self.cfg, is_train=True, choices=strong_transforms
+        )
+        dm = MultiTargetDataManager(
+            self.cfg,
+            custom_tfm_train_x=weak_transform,
+            custom_tfm_train_u=[weak_transform, strong_transform],
+        )
+        self.train_loader_x = dm.train_loader_x
+        self.train_loader_u = dm.train_loader_u
+        self.val_loader = dm.val_loader
+        self.test_loader = dm.test_loader
+        self.test_loaders_by_domain = dm.test_loaders_by_domain
+        self.num_classes = dm.num_classes
+        self.num_source_domains = dm.num_source_domains
+        self.lab2cname = dm.lab2cname
+        self.dm = dm
+        print(f"Dual-view PL weak transforms: {list(self.cfg.INPUT.TRANSFORMS)}")
+        print(f"Dual-view PL strong transforms: {strong_transforms}")
+
+    def parse_batch_train(self, batch_x, batch_u):
+        input_x = batch_x["img"].to(self.device)
+        label_x = batch_x["label"].to(self.device)
+        input_u = OrderedDict()
+        dual_view = (
+            str(self.cfg.TRAINER.MAPLE_MTDA.PL_VARIANT).lower() != "legacy"
+        )
+        curriculum_cfg = getattr(
+            self.cfg.TRAINER.MAPLE_MTDA, "CURRICULUM", None
+        )
+        diagnostics_enabled = bool(
+            curriculum_cfg is not None
+            and bool(curriculum_cfg.DIAGNOSTICS.ENABLED)
+        )
+        for domain_name, batch in batch_u.items():
+            if dual_view:
+                if "img2" not in batch:
+                    raise KeyError("Dual-view PL target batch is missing img2")
+                views = {
+                    "weak": batch["img"].to(self.device),
+                    "strong": batch["img2"].to(self.device),
+                }
+                if diagnostics_enabled:
+                    # Diagnostic only: never consulted by target construction.
+                    views["true_label"] = batch["label"].to(self.device)
+                input_u[domain_name] = views
+            else:
+                input_u[domain_name] = batch["img"].to(self.device)
+        return input_x, label_x, input_u
 
     def _registered_model_name(self):
         names = self.get_model_names()
@@ -1190,7 +1447,14 @@ class MaPLeMTDA(MultiTargetTrainerXU):
             print(f"  target domains: {list(image_u.keys())}")
             print(f"  source batch shape: {tuple(image_x.shape)}")
             for domain_name, image in image_u.items():
-                print(f"  target batch shape[{domain_name}]: {tuple(image.shape)}")
+                if isinstance(image, dict):
+                    print(
+                        f"  target batch shapes[{domain_name}]: "
+                        f"weak={tuple(image['weak'].shape)}, "
+                        f"strong={tuple(image['strong'].shape)}"
+                    )
+                else:
+                    print(f"  target batch shape[{domain_name}]: {tuple(image.shape)}")
             self._debug_printed = True
 
         prec = self.cfg.TRAINER.MAPLE_MTDA.PREC
@@ -1198,6 +1462,12 @@ class MaPLeMTDA(MultiTargetTrainerXU):
             with autocast():
                 outputs = self.model.forward_train(image_x, label_x, image_u)
                 loss = outputs["loss"]
+            for key in (
+                "_source_ce_objective",
+                "_pl_hard_objective",
+                "_pl_soft_objective",
+            ):
+                outputs.pop(key, None)
             self.optim.zero_grad()
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optim)
@@ -1205,6 +1475,12 @@ class MaPLeMTDA(MultiTargetTrainerXU):
         else:
             outputs = self.model.forward_train(image_x, label_x, image_u)
             loss = outputs["loss"]
+            for key in (
+                "_source_ce_objective",
+                "_pl_hard_objective",
+                "_pl_soft_objective",
+            ):
+                outputs.pop(key, None)
             self.optim.zero_grad()
             loss.backward()
             self.optim.step()

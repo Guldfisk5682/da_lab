@@ -12,6 +12,7 @@ from trainers.maple_curriculum_mtda import (
     select_topk_replay_records,
     stage_local_schedule_index,
 )
+from trainers.maple_mtda import CustomMaPLeMTDA
 
 
 def test_one_pass_step_normalization_matches_actual_replay_update_budget():
@@ -155,6 +156,51 @@ def test_replay_gradient_audit_measures_only_weighted_replay_objective():
     assert trainer._stage_replay_grad_norm_sum == pytest.approx(10.0)
     accumulated = next(iter(trainer._stage_replay_grad_vector_sum.values()))
     assert torch.equal(accumulated, torch.tensor([6.0, 8.0]))
+
+
+def _dual_pl_model(variant):
+    model = object.__new__(CustomMaPLeMTDA)
+    torch.nn.Module.__init__(model)
+    model.pl_variant = variant
+    model.pl_dual_conf_threshold = 0.7
+    model.pl_threshold = 0.7
+    model.pl_student_threshold = 0.7
+    model.pl_use_student_low_conf_mask = True
+    return model
+
+
+def test_dual_pl_separates_agreement_hard_and_disagreement_soft_masks():
+    model = _dual_pl_model("agreement_hard_soft")
+    strong = torch.tensor(
+        [[2.0, 0.0, -1.0], [0.0, 1.0, -1.0], [1.0, 0.0, -1.0]],
+        requires_grad=True,
+    )
+    teacher = torch.log(
+        torch.tensor([[0.8, 0.1, 0.1], [0.75, 0.2, 0.05], [0.6, 0.3, 0.1]])
+    )
+    student = torch.log(
+        torch.tensor([[0.75, 0.2, 0.05], [0.1, 0.8, 0.1], [0.8, 0.1, 0.1]])
+    ).requires_grad_()
+    terms = model._dual_view_pseudo_label_terms(
+        strong, student, teacher, true_label=torch.tensor([0, 1, 0])
+    )
+    assert terms["hard_count"].item() == 1
+    assert terms["soft_count"].item() == 1
+    assert terms["hard_correct_count"].item() == 1
+    assert terms["soft_correct_count"].item() == 1
+    (terms["hard_sum"] + terms["soft_sum"]).backward()
+    assert strong.grad is not None
+    assert student.grad is None
+
+
+def test_hard_only_control_drops_disagreement_without_changing_hard_gate():
+    model = _dual_pl_model("agreement_hard")
+    strong = torch.zeros(2, 2, requires_grad=True)
+    teacher = torch.log(torch.tensor([[0.8, 0.2], [0.8, 0.2]]))
+    student = torch.log(torch.tensor([[0.9, 0.1], [0.1, 0.9]]))
+    terms = model._dual_view_pseudo_label_terms(strong, student, teacher)
+    assert terms["hard_count"].item() == 1
+    assert terms["soft_count"].item() == 0
 
 
 def test_stage_local_schedule_gives_equal_lr_budget_to_each_virtual_epoch():

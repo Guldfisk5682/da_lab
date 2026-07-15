@@ -1204,3 +1204,36 @@ requested weight. Local archives:
 .tmp/agent_handoff/logs/replay_weight_confirm_20260715/
 .tmp/agent_handoff/results/replay_weight_20260715/
 ```
+
+## Dual-View Teacher/Student PL Pilot (approved 2026-07-15)
+
+The next main-line experiment borrows DUET's teacher/student complementarity
+without replicating the full method. For each target image, frozen CLIP and the
+prompt student predict on a weak view. If both top-1 confidences are at least
+`0.7` and their labels agree, the common top-1 becomes a detached hard target.
+If both are confident but disagree, the detached mean of their probability
+vectors becomes a soft target. All other samples abstain. Both branches
+supervise a separately augmented strong student view and are normalized by
+their own selected counts:
+
+```text
+L_PL = mean_selected(CE_hard) + 1.0 * mean_selected(CE_soft)
+```
+
+The outer PL coefficient remains `0.3`. Replay is locked to online Top-K8,
+full-cycle traversal, no normalization, and lambda `0.75`. No low-confidence
+branch or new weight search is allowed in this pilot.
+
+The controlled matrix is A2CPR/C2APR seed100 with two variants:
+`agreement_hard` and `agreement_hard_soft`. The former is required to isolate
+the contribution of disagreement soft labels; the existing legacy-PL lambda
+0.75 runs are the reference baseline.
+
+Diagnostics must explicitly test the early-training concern that the initial
+student may provide few confident agreements. Every 50 optimizer steps, record
+hard/soft selected counts and true accuracy (target labels are audit-only),
+active-step counts, branch loss totals, and low-frequency source/hard/soft
+gradient norms and cosines. At initialization and every stage boundary, write
+full-dataset per-sample teacher, student, mixture, hard/soft selection, true
+probability, correctness, and confidence records. These labels must never
+affect target construction or optimization.

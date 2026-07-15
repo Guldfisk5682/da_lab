@@ -317,6 +317,14 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self._stage_expected_optimizer_steps = 0
         self._stage_replay_loss_scale = 0.0
         self._stage_scheduler_index = 0
+        self.pl_diagnostic_window = int(
+            self.cfg.TRAINER.MAPLE_MTDA.PL_DIAGNOSTIC_WINDOW
+        )
+        self.pl_grad_audit_interval = int(
+            self.cfg.TRAINER.MAPLE_MTDA.PL_GRAD_AUDIT_INTERVAL
+        )
+        self._pl_window = None
+        self._initial_pl_audit_written = False
         self._tfm_train = build_transform(self.cfg, is_train=True)
         self._tfm_test = build_transform(self.cfg, is_train=False)
         print(f"Curriculum target order: {self.curriculum_order}")
@@ -424,19 +432,37 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             )
             student_conf, student_label = student_probs.max(dim=-1)
             clip_conf, clip_label = clip_probs.max(dim=-1)
+            mixture_probs = 0.5 * (student_probs + clip_probs)
+            mixture_conf, mixture_label = mixture_probs.max(dim=-1)
+            mixture_entropy = -(
+                mixture_probs * (mixture_probs + 1e-12).log()
+            ).sum(dim=-1)
             for offset, index in enumerate(batch["index"].tolist()):
                 item = data_source[index]
+                true_label = int(item.label)
                 records.append(
                     {
                         "domain": domain_name,
                         "domain_id": int(item.domain),
                         "dataset_index": int(index),
                         "impath": item.impath,
-                        "true_label": int(item.label),
+                        "true_label": true_label,
                         "student_label": int(student_label[offset].item()),
                         "student_conf": float(student_conf[offset].item()),
                         "clip_label": int(clip_label[offset].item()),
                         "clip_conf": float(clip_conf[offset].item()),
+                        "student_true_prob": float(
+                            student_probs[offset, true_label].item()
+                        ),
+                        "clip_true_prob": float(
+                            clip_probs[offset, true_label].item()
+                        ),
+                        "mixture_label": int(mixture_label[offset].item()),
+                        "mixture_conf": float(mixture_conf[offset].item()),
+                        "mixture_true_prob": float(
+                            mixture_probs[offset, true_label].item()
+                        ),
+                        "mixture_entropy": float(mixture_entropy[offset].item()),
                     }
                 )
         if was_training:
@@ -629,6 +655,18 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                     clean_pl_selected = clean_pl_selected and float(
                         record["student_conf"]
                     ) < float(self.model.pl_student_threshold)
+                dual_high = (
+                    float(record["clip_conf"])
+                    >= float(self.model.pl_dual_conf_threshold)
+                    and float(record["student_conf"])
+                    >= float(self.model.pl_dual_conf_threshold)
+                )
+                dual_hard = dual_high and agreement
+                dual_soft = (
+                    dual_high
+                    and not agreement
+                    and self.model.pl_variant == "agreement_hard_soft"
+                )
                 payload.update(
                     {
                         "boundary_stage": int(stage),
@@ -641,6 +679,14 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                             agreement and not student_correct and not clip_correct
                         ),
                         "clean_pl_selected": bool(clean_pl_selected),
+                        "dual_high_conf": bool(dual_high),
+                        "dual_hard_selected": bool(dual_hard),
+                        "dual_soft_selected": bool(dual_soft),
+                        "dual_pl_selected": bool(dual_hard or dual_soft),
+                        "mixture_correct": bool(
+                            int(record["mixture_label"])
+                            == int(record["true_label"])
+                        ),
                         "eligible": impath in eligible_paths,
                         "standard_topk": impath in standard_paths,
                         "oracle_correct_topk": impath in oracle_paths,
@@ -982,8 +1028,35 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
     def _enter_stage(self, stage, global_step):
         if self._active_stage == stage:
             return
+        if (
+            not self._initial_pl_audit_written
+            and self.diagnostics_enabled
+            and self.model.pl_variant != "legacy"
+        ):
+            python_state = random.getstate()
+            numpy_state = np.random.get_state()
+            torch_state = torch.get_rng_state()
+            cuda_states = (
+                torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+            )
+            try:
+                initial_scores = {
+                    domain: self._score_domain_for_replay(domain)
+                    for domain in self.curriculum_order
+                }
+                self._write_prediction_audit(
+                    -1, "initial", global_step, initial_scores, []
+                )
+            finally:
+                random.setstate(python_state)
+                np.random.set_state(numpy_state)
+                torch.set_rng_state(torch_state)
+                if cuda_states is not None:
+                    torch.cuda.set_rng_state_all(cuda_states)
+            self._initial_pl_audit_written = True
         if self._active_stage is not None:
             fitted_domain = self.curriculum_order[self._active_stage]
+            self._flush_pl_training_window(global_step)
             self._write_stage_audit(self._active_stage, fitted_domain, global_step)
             self._finalize_fitted_stage(
                 self._active_stage,
@@ -1108,6 +1181,146 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self._stage_replay_grad_norm_sq_sum += squared_norm
         return gradient_norm
 
+    def _objective_gradient(self, objective):
+        if objective is None or not objective.requires_grad:
+            return {}
+        parameters = [
+            parameter for parameter in self.model.parameters() if parameter.requires_grad
+        ]
+        gradients = torch.autograd.grad(
+            objective, parameters, retain_graph=True, allow_unused=True
+        )
+        return {
+            index: gradient.detach().float()
+            for index, gradient in enumerate(gradients)
+            if gradient is not None
+        }
+
+    @staticmethod
+    def _gradient_norm(gradient):
+        return sum(float(value.pow(2).sum().item()) for value in gradient.values()) ** 0.5
+
+    @classmethod
+    def _gradient_cosine(cls, left, right):
+        shared = set(left) & set(right)
+        left_norm = cls._gradient_norm(left)
+        right_norm = cls._gradient_norm(right)
+        if not shared or left_norm == 0.0 or right_norm == 0.0:
+            return 0.0
+        dot = sum(float((left[index] * right[index]).sum().item()) for index in shared)
+        return dot / (left_norm * right_norm)
+
+    def _measure_pl_branch_gradients(self, source, hard, soft, global_step):
+        metrics = {
+            "pl_gradient_audit_active": 0.0,
+            "source_gradient_norm": 0.0,
+            "pl_hard_gradient_norm": 0.0,
+            "pl_soft_gradient_norm": 0.0,
+            "pl_hard_soft_gradient_cosine": 0.0,
+            "pl_hard_source_gradient_cosine": 0.0,
+            "pl_soft_source_gradient_cosine": 0.0,
+        }
+        if (
+            not self.diagnostics_enabled
+            or self.model.pl_variant == "legacy"
+            or global_step % self.pl_grad_audit_interval != 0
+        ):
+            return metrics
+        gradients = {
+            "source": self._objective_gradient(source),
+            "hard": self._objective_gradient(hard),
+            "soft": self._objective_gradient(soft),
+        }
+        metrics.update(
+            {
+                "pl_gradient_audit_active": 1.0,
+                "source_gradient_norm": self._gradient_norm(gradients["source"]),
+                "pl_hard_gradient_norm": self._gradient_norm(gradients["hard"]),
+                "pl_soft_gradient_norm": self._gradient_norm(gradients["soft"]),
+                "pl_hard_soft_gradient_cosine": self._gradient_cosine(
+                    gradients["hard"], gradients["soft"]
+                ),
+                "pl_hard_source_gradient_cosine": self._gradient_cosine(
+                    gradients["hard"], gradients["source"]
+                ),
+                "pl_soft_source_gradient_cosine": self._gradient_cosine(
+                    gradients["soft"], gradients["source"]
+                ),
+            }
+        )
+        return metrics
+
+    def _update_pl_training_window(self, summary, global_step, stage):
+        if self.model.pl_variant == "legacy":
+            return
+        if self._pl_window is None:
+            self._pl_window = {
+                "start_step": int(global_step),
+                "stage": int(stage),
+                "steps": 0,
+                "hard_active_steps": 0,
+                "soft_active_steps": 0,
+                "gradient_audits": 0,
+            }
+        window = self._pl_window
+        window["steps"] += 1
+        window["hard_active_steps"] += int(summary.get("pl_hard_active", 0.0) > 0)
+        window["soft_active_steps"] += int(summary.get("pl_soft_active", 0.0) > 0)
+        window["gradient_audits"] += int(
+            summary.get("pl_gradient_audit_active", 0.0) > 0
+        )
+        summed_fields = (
+            "pl_total_count",
+            "pl_hard_count",
+            "pl_soft_count",
+            "pl_selected_count",
+            "pl_hard_correct_count",
+            "pl_soft_correct_count",
+            "weighted_loss_pl_hard",
+            "weighted_loss_pl_soft",
+            "source_gradient_norm",
+            "pl_hard_gradient_norm",
+            "pl_soft_gradient_norm",
+            "pl_hard_soft_gradient_cosine",
+            "pl_hard_source_gradient_cosine",
+            "pl_soft_source_gradient_cosine",
+        )
+        for field in summed_fields:
+            window[field] = window.get(field, 0.0) + float(summary.get(field, 0.0))
+        if window["steps"] >= self.pl_diagnostic_window:
+            self._flush_pl_training_window(global_step + 1)
+
+    def _flush_pl_training_window(self, end_step):
+        if self._pl_window is None:
+            return
+        payload = dict(self._pl_window)
+        payload["end_step_exclusive"] = int(end_step)
+        total = max(float(payload.get("pl_total_count", 0.0)), 1.0)
+        payload["hard_coverage"] = float(payload.get("pl_hard_count", 0.0)) / total
+        payload["soft_coverage"] = float(payload.get("pl_soft_count", 0.0)) / total
+        payload["selected_coverage"] = float(
+            payload.get("pl_selected_count", 0.0)
+        ) / total
+        payload["hard_true_accuracy"] = float(
+            payload.get("pl_hard_correct_count", 0.0)
+        ) / max(float(payload.get("pl_hard_count", 0.0)), 1.0)
+        payload["soft_argmax_true_accuracy"] = float(
+            payload.get("pl_soft_correct_count", 0.0)
+        ) / max(float(payload.get("pl_soft_count", 0.0)), 1.0)
+        audits = max(int(payload.get("gradient_audits", 0)), 1)
+        for field in (
+            "source_gradient_norm",
+            "pl_hard_gradient_norm",
+            "pl_soft_gradient_norm",
+            "pl_hard_soft_gradient_cosine",
+            "pl_hard_source_gradient_cosine",
+            "pl_soft_source_gradient_cosine",
+        ):
+            payload[f"mean_{field}"] = float(payload.get(field, 0.0)) / audits
+        self._write_jsonl("pl_training_window_audit.jsonl", payload)
+        print("PL training window audit: " + json.dumps(payload, sort_keys=True))
+        self._pl_window = None
+
     def forward_backward(self, batch_x, batch_u, replay_batch=None):
         image_x, label_x, image_u = self.parse_batch_train(batch_x, batch_u)
         replay_image = None
@@ -1122,6 +1335,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             self.model.set_training_progress(progress)
 
         prec = self.cfg.TRAINER.MAPLE_MTDA.PREC
+        global_step = self.epoch * self.num_batches + self.batch_idx
         if prec == "amp":
             with autocast():
                 outputs = self.model.forward_train(
@@ -1133,8 +1347,14 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                     replay_loss_scale=self._stage_replay_loss_scale,
                 )
                 loss = outputs["loss"]
+            source_objective = outputs.pop("_source_ce_objective", None)
+            hard_objective = outputs.pop("_pl_hard_objective", None)
+            soft_objective = outputs.pop("_pl_soft_objective", None)
             replay_objective = outputs.pop("_weighted_replay_objective")
             replay_gradient_norm = self._measure_replay_gradient(replay_objective)
+            pl_gradient_metrics = self._measure_pl_branch_gradients(
+                source_objective, hard_objective, soft_objective, global_step
+            )
             self.optim.zero_grad()
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optim)
@@ -1149,8 +1369,14 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                 replay_loss_scale=self._stage_replay_loss_scale,
             )
             loss = outputs["loss"]
+            source_objective = outputs.pop("_source_ce_objective", None)
+            hard_objective = outputs.pop("_pl_hard_objective", None)
+            soft_objective = outputs.pop("_pl_soft_objective", None)
             replay_objective = outputs.pop("_weighted_replay_objective")
             replay_gradient_norm = self._measure_replay_gradient(replay_objective)
+            pl_gradient_metrics = self._measure_pl_branch_gradients(
+                source_objective, hard_objective, soft_objective, global_step
+            )
             self.optim.zero_grad()
             loss.backward()
             self.optim.step()
@@ -1162,6 +1388,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             if self._stage_replay_loss_scale > 0.0
             else 0.0
         )
+        summary.update(pl_gradient_metrics)
         for key, value in outputs.items():
             if key != "loss":
                 summary[key] = value.item() if torch.is_tensor(value) else float(value)
@@ -1200,6 +1427,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
 
             data_time.update(time.time() - end)
             loss_summary = self.forward_backward(batch_x, batch_u, replay_batch)
+            self._update_pl_training_window(loss_summary, global_step, stage)
             self._stage_optimizer_steps += 1
             self._stage_target_batches_seen += self.microbatches_per_step
             self._stage_target_images_seen += sum(
@@ -1248,6 +1476,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         if self._active_stage is not None:
             final_domain = self.curriculum_order[self._active_stage]
             total_steps = self.max_epoch * self.num_batches
+            self._flush_pl_training_window(total_steps)
             self._write_stage_audit(self._active_stage, final_domain, total_steps)
             print(f"Scoring final fitted domain for audit only: {final_domain}")
             self._finalize_fitted_stage(

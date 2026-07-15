@@ -215,6 +215,7 @@ class CustomContinuousMaPLeMTDA(CustomMaPLeMTDA):
         self.pl_use_student_low_conf_mask = bool(
             maple_cfg.PL_USE_STUDENT_LOW_CONF_MASK
         )
+        self._init_dual_pl_config(maple_cfg)
         self._init_weak_pl_config(maple_cfg)
         self._init_self_distill_config(maple_cfg)
         self.debug_print_once = bool(maple_cfg.DEBUG.PRINT_ONCE)
@@ -239,6 +240,12 @@ class CustomContinuousMaPLeMTDA(CustomMaPLeMTDA):
             f"{self.log_prefix} pseudo-label low-conf only: "
             f"{self.pl_use_student_low_conf_mask}"
         )
+        print(f"{self.log_prefix} pseudo-label variant: {self.pl_variant}")
+        print(
+            f"{self.log_prefix} dual-confidence threshold: "
+            f"{self.pl_dual_conf_threshold}"
+        )
+        print(f"{self.log_prefix} soft pseudo-label beta: {self.pl_soft_beta}")
         print(f"{self.log_prefix} weak PL enabled: {self.weak_pl_enabled}")
         print(f"{self.log_prefix} weak PL weight: {self.lambda_weak_pl}")
         print(

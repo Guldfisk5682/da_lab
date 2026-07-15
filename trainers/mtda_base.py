@@ -21,6 +21,8 @@ class MultiTargetDataManager:
         self,
         cfg,
         custom_tfm_train=None,
+        custom_tfm_train_x=None,
+        custom_tfm_train_u=None,
         custom_tfm_test=None,
         dataset_wrapper=None,
     ):
@@ -32,11 +34,29 @@ class MultiTargetDataManager:
                 "train_u_by_domain and test_by_domain"
             )
 
-        if custom_tfm_train is None:
-            tfm_train = build_transform(cfg, is_train=True)
-        else:
+        if custom_tfm_train is not None and (
+            custom_tfm_train_x is not None or custom_tfm_train_u is not None
+        ):
+            raise ValueError(
+                "custom_tfm_train cannot be combined with split x/u transforms"
+            )
+        if custom_tfm_train is not None:
             print("* Using custom transform for training")
-            tfm_train = custom_tfm_train
+            tfm_train_x = custom_tfm_train
+            tfm_train_u = custom_tfm_train
+        else:
+            tfm_train_x = (
+                build_transform(cfg, is_train=True)
+                if custom_tfm_train_x is None
+                else custom_tfm_train_x
+            )
+            tfm_train_u = (
+                tfm_train_x
+                if custom_tfm_train_u is None
+                else custom_tfm_train_u
+            )
+            if custom_tfm_train_x is not None or custom_tfm_train_u is not None:
+                print("* Using separate source/target transforms for training")
 
         if custom_tfm_test is None:
             tfm_test = build_transform(cfg, is_train=False)
@@ -54,7 +74,7 @@ class MultiTargetDataManager:
             batch_size=cfg.DATALOADER.TRAIN_X.BATCH_SIZE,
             n_domain=cfg.DATALOADER.TRAIN_X.N_DOMAIN,
             n_ins=cfg.DATALOADER.TRAIN_X.N_INS,
-            tfm=tfm_train,
+            tfm=tfm_train_x,
             is_train=True,
             dataset_wrapper=dataset_wrapper,
         )
@@ -78,7 +98,7 @@ class MultiTargetDataManager:
                 batch_size=batch_size_u,
                 n_domain=n_domain_u,
                 n_ins=n_ins_u,
-                tfm=tfm_train,
+                tfm=tfm_train_u,
                 is_train=True,
                 dataset_wrapper=dataset_wrapper,
             )
