@@ -32,6 +32,7 @@ import datasets.imagenet_a
 import datasets.imagenet_r
 
 import trainers.coop
+import trainers.coop_mtda
 import trainers.cocoop
 import trainers.cocoop_mtda
 import trainers.cocoop_vpt_mtda
@@ -163,6 +164,11 @@ def extend_cfg(cfg):
     cfg.TRAINER.COCOOP_MTDA.PREC = "fp16"
     cfg.TRAINER.COCOOP_MTDA.DEBUG = CN()
     cfg.TRAINER.COCOOP_MTDA.DEBUG.PRINT_ONCE = False
+
+    cfg.TRAINER.PROMPT_BASELINE_MTDA = CN()
+    cfg.TRAINER.PROMPT_BASELINE_MTDA.MIX_TARGETS = False
+    cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT = 0.0
+    cfg.TRAINER.PROMPT_BASELINE_MTDA.ENTROPY_EPS = 1e-8
 
     cfg.TRAINER.COCOOP_VPT_MTDA = CN()
     cfg.TRAINER.COCOOP_VPT_MTDA.PREC = "fp16"

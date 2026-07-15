@@ -1427,3 +1427,121 @@ gradient diagnostics. No EMA count smoothing, temperature search, teacher
 mixture, or low-confidence consistency is allowed in this pilot. Run only
 A2CPR and C2APR seed100, in parallel if both GPUs are available, and compare
 against the completed agreement-hard runs without rerunning them.
+
+## VLM MTDA Baseline Reproduction Workspace (2026-07-15)
+
+An isolated baseline workspace was created on `lab-server` at
+`~/workspace/vlm_mtda_baselines`; no baseline training was launched. PADCLIP
+is excluded from reproduction because no official implementation was found
+and remains citation-only.
+
+- `source-free-domain-adaptation`, branch `mtda-vitb16`: extends official
+  ProDe to one mixed target loader containing all non-source Office-Home
+  domains, adds ordinary labeled-source CE for the requested source-available
+  setting, and evaluates one shared checkpoint per target domain. The CLIP
+  proxy is changed to ViT-B/16, but the adapted classifier in the official
+  implementation remains ResNet-50; this must not be reported as a ViT-B/16
+  student baseline. The data-loader dry run produced 13,161 mixed target
+  samples and 2,427 source samples for A2CPR. Execution is currently blocked
+  intentionally at preflight because the official-format source F/B/C
+  checkpoints are not present.
+- `DAMP`, branch `mtda-vitb16`: uses Dassl's native multi-target concatenation
+  to train one source-available ViT-B/16 DAMP model, then evaluates the same
+  checkpoint on each target separately. The original source-sized training
+  budget is preserved: for A2CPR, 75 optimizer steps per epoch and 2,250 over
+  30 epochs, despite the mixed target loader containing 13,161 samples.
+
+Both repositories use the isolated
+`~/workspace/vlm_mtda_baselines/.venv`, which inherits the server PyTorch/CUDA
+installation without modifying the existing `coop-da` environment. Static
+syntax checks, image-list generation, and Office-Home loader dry runs pass.
+
+### Seed-100 baseline reproduction launch (2026-07-15 19:12 CST)
+
+Both GPUs already held about 8.5 GiB from unrelated container workloads; GPU 0
+was subsequently observed at 92-99% utilization. DAMP-MT therefore runs alone
+on GPU 1, and ProDe is persistently queued on GPU 1 after DAMP completes rather
+than competing with the active GPU-0 workload.
+
+- DAMP PID/log pointers are stored under
+  `~/workspace/vlm_mtda_baselines/DAMP/run_logs/officehome_all_seed100.*`.
+  The active clean restart uses seed 100 and all four Office-Home
+  source-to-rest tasks. Two upstream compatibility defects were fixed before
+  the clean run: legacy Dassl RandAugment's removed `np.int` alias and DAMP's
+  evaluation path incorrectly unpacking an unused second model output. The
+  clean run passed epoch 1 training and evaluation (mixed-target accuracy
+  84.1%) and continued through epoch 2.
+- The ProDe queue PID/log pointers are stored under
+  `~/workspace/vlm_mtda_baselines/run_logs/prode_after_damp_seed100.*`. It
+  verifies that all four DAMP `mtda_metrics.json` files exist before launching,
+  then trains missing official 50-epoch ResNet-50 source models and runs the
+  four mixed-target ProDe adaptations with seed 100. This serial schedule is a
+  resource-safety choice, not a change to either method.
+
+At the first full check, A2CPR training had completed all 30 epochs in 40:40
+with final mixed-target validation accuracy 85.1%, but PyTorch 2.6's new
+weights-only default rejected the locally generated Dassl checkpoint during
+per-domain evaluation. The checkpoints were intact. The wrapper now explicitly
+allows full loading only for these trusted local checkpoints and recognizes a
+complete epoch-30 prompt/context pair so evaluation can resume without
+retraining. The resumed A2CPR per-domain evaluation reports Clipart 72.8% and
+Product 92.0%; RealWorld evaluation was still running at the latest check.
+C/P/R training had not yet begun. The ProDe queue correctly refused to start
+when DAMP metrics were incomplete and was relaunched against the new DAMP PID.
+
+The original reason not to parallelize was confirmed: GPU 0 previously held
+about 8.4 GiB and sustained 92-99% utilization from another container. At the
+next check both GPUs had fully cleared (1 MiB, 0%), so the serial queue was
+retired. DAMP was relaunched resumably on GPU 1 and full ProDe seed100 was
+started concurrently on GPU 0. ProDe is currently downloading the official
+ResNet-50 ImageNet initialization before its first Art source-model training.
+The DAMP evaluator now tees each per-domain stdout to an independent file so a
+stale failed `log.txt` cannot block metrics collection; A2CPR training is still
+reused rather than rerun.
+
+### Completed VLM MTDA baselines, seed 100 (2026-07-16)
+
+Both baseline reproductions completed, all controller/child processes exited,
+and both GPUs were idle on independent verification. DAMP-MT results are:
+A2CPR `72.8/92.0/90.5` (macro `85.10`), C2APR
+`85.6/93.2/90.9` (`89.90`), P2ACR `83.8/73.7/91.1` (`82.87`), and R2ACP
+`82.4/73.5/92.4` (`82.77`), giving a four-task macro mean of `85.16`. All four
+tasks have two epoch-30 component checkpoints, per-domain logs, and complete
+metrics with seed/backbone/parameter/step fields (DAMP commit `a01d97b`).
+
+ProDe results are: A2CPR `77.78/92.52/93.50` (macro `87.93`), C2APR
+`88.09/94.19/93.23` (`91.84`), P2ACR `87.72/77.16/93.44` (`86.11`), and R2ACP
+`89.16/77.53/93.65` (`86.78`), giving a four-task macro mean of `88.16`.
+Every task satisfies `completed_steps == optimizer_steps`; all 12 source F/B/C
+checkpoints and all adaptation metrics/logs exist (ProDe commit `7b66ca7`).
+During ProDe A2CPR initialization, the deterministic logit-bank loader exposed
+a final singleton batch while the ResNet BN remained in train mode. Restoring
+the upstream bank-loader behavior `drop_last=True` fixed this without changing
+the optimization budget or objective (commit `27a014d`); completed source
+models were reused. ProDe's upstream `ISSAVE=False` leaves no adapted target
+checkpoint, but complete metrics and logs are available for the benchmark.
+
+### Baseline parameter/budget comparison (2026-07-16)
+
+Use optimizer steps and batch exposure rather than nominal epochs. The final
+method trains 788,992 parameters for exactly 3,030 steps per source-to-rest
+task (three 1,010-step stages), with source batch 4, three target microbatches
+of 4 per step, and replay batch 4 in stages 2/3. This corresponds to 12,120
+source, 36,360 main-target, and 8,080 replay sample exposures per task. Target
+samples additionally require student weak/strong and frozen-CLIP reference
+forwards. The completed diagnostic runs took about 40-44 minutes each, but
+include boundary audits and periodic gradient diagnostics that are not part of
+the deployable method.
+
+DAMP trains 6,725,122 parameters (8.52x ours), batch 32 source + 32 target,
+and 2,250/4,080/4,140/4,080 steps for A/C/P/R (mean 3,637.5, 1.20x our step
+count). Its mean source and target exposure are each about 116,400 samples,
+far above ours despite the similar step count. ProDe adaptation touches
+49,890,499 parameters (63.23x ours), batch 64 target + 64 source, and
+6,180/5,280/5,250/5,280 adaptation steps (mean 5,497.5, 1.81x ours). It also
+requires separate 50-epoch source training of 1,750/3,100/3,150/3,100 steps;
+end-to-end mean is 8,272.5 steps per task (2.73x ours) before accounting for
+its per-batch ViT-B/16 proxy TTA. Report ProDe adaptation-only and end-to-end
+budgets separately. Its 88.16 mean versus our 85.23 is therefore not a
+parameter- or compute-matched comparison; DAMP reaches 85.16 with substantially
+more parameters and sample exposure than ours.

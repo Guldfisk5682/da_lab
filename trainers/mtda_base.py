@@ -89,8 +89,34 @@ class MultiTargetDataManager:
             n_domain_u = cfg.DATALOADER.TRAIN_X.N_DOMAIN
             n_ins_u = cfg.DATALOADER.TRAIN_X.N_INS
 
+        target_training_sets = dataset.train_u_by_domain
+        mix_targets = bool(
+            getattr(
+                getattr(cfg.TRAINER, "PROMPT_BASELINE_MTDA", None),
+                "MIX_TARGETS",
+                False,
+            )
+        )
+        if mix_targets:
+            entropy_weight = float(
+                cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT
+            )
+            if entropy_weight == 0.0:
+                target_training_sets = OrderedDict()
+                print("Source-only baseline: target training loader is not built")
+            else:
+                mixed_items = []
+                for items in target_training_sets.values():
+                    mixed_items.extend(items)
+                target_training_sets = OrderedDict([("mixed_target", mixed_items)])
+                print(
+                    "Mixed-target training loader: {} images from {} domains".format(
+                        len(mixed_items), len(dataset.train_u_by_domain)
+                    )
+                )
+
         train_loaders_u = OrderedDict()
-        for domain_name, items in dataset.train_u_by_domain.items():
+        for domain_name, items in target_training_sets.items():
             train_loaders_u[domain_name] = build_data_loader(
                 cfg,
                 sampler_type=sampler_type_u,
@@ -241,23 +267,46 @@ class MultiTargetTrainerXU(SimpleTrainer):
         data_time = AverageMeter()
 
         len_train_loader_x = len(self.train_loader_x)
-        len_train_loader_u = [len(loader) for loader in self.train_loader_u.values()]
-        min_train_loader_u = min(len_train_loader_u)
+        use_target_training = bool(getattr(self, "uses_target_training", True))
 
-        if self.cfg.TRAIN.COUNT_ITER == "train_x":
+        if not use_target_training:
             self.num_batches = len_train_loader_x
-        elif self.cfg.TRAIN.COUNT_ITER == "train_u":
-            self.num_batches = min_train_loader_u
-        elif self.cfg.TRAIN.COUNT_ITER == "smaller_one":
-            self.num_batches = min([len_train_loader_x, *len_train_loader_u])
         else:
-            raise ValueError(f"Unsupported TRAIN.COUNT_ITER={self.cfg.TRAIN.COUNT_ITER}")
+            len_train_loader_u = [
+                len(loader) for loader in self.train_loader_u.values()
+            ]
+            if not len_train_loader_u:
+                raise RuntimeError("Target training enabled but no target loader was built")
+            min_train_loader_u = min(len_train_loader_u)
+            if self.cfg.TRAIN.COUNT_ITER == "train_x":
+                self.num_batches = len_train_loader_x
+            elif self.cfg.TRAIN.COUNT_ITER == "train_u":
+                self.num_batches = min_train_loader_u
+            elif self.cfg.TRAIN.COUNT_ITER == "smaller_one":
+                self.num_batches = min([len_train_loader_x, *len_train_loader_u])
+            else:
+                raise ValueError(
+                    f"Unsupported TRAIN.COUNT_ITER={self.cfg.TRAIN.COUNT_ITER}"
+                )
 
         train_loader_x_iter = iter(self.train_loader_x)
-        train_loader_u_iters = OrderedDict(
-            (domain_name, iter(loader))
-            for domain_name, loader in self.train_loader_u.items()
-        )
+        train_loader_u_iters = OrderedDict()
+        if use_target_training:
+            train_loader_u_iters = OrderedDict(
+                (domain_name, iter(loader))
+                for domain_name, loader in self.train_loader_u.items()
+            )
+
+        if self.epoch == 0:
+            print(
+                "Baseline budget audit: epochs={}, steps_per_epoch={}, "
+                "optimizer_steps={}, target_training={}".format(
+                    self.max_epoch,
+                    self.num_batches,
+                    self.max_epoch * self.num_batches,
+                    use_target_training,
+                )
+            )
 
         end = time.time()
         for self.batch_idx in range(self.num_batches):
@@ -268,7 +317,9 @@ class MultiTargetTrainerXU(SimpleTrainer):
                 batch_x = next(train_loader_x_iter)
 
             batch_u = OrderedDict()
-            for domain_name, loader in self.train_loader_u.items():
+            for domain_name, loader in (
+                self.train_loader_u.items() if use_target_training else []
+            ):
                 try:
                     batch_u[domain_name] = next(train_loader_u_iters[domain_name])
                 except StopIteration:

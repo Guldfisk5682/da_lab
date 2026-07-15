@@ -193,6 +193,9 @@ class CustomMaPLeMTDA(nn.Module):
         self.token_embedding = clip_model.token_embedding
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
+        baseline_cfg = cfg.TRAINER.PROMPT_BASELINE_MTDA
+        self.lambda_ent = float(baseline_cfg.LAMBDA_ENT)
+        self.entropy_eps = float(baseline_cfg.ENTROPY_EPS)
         self.lambda_pl = float(maple_cfg.LAMBDA_PL)
         self.lambda_pl_final = float(maple_cfg.LAMBDA_PL_FINAL)
         self.pl_schedule = str(maple_cfg.PL_SCHEDULE).lower()
@@ -864,6 +867,26 @@ class CustomMaPLeMTDA(nn.Module):
         return loss, stats
 
     def forward_train(self, image_s, label_s, image_u_dict):
+        if self.lambda_ent > 0.0:
+            logits_s = self(image_s)
+            loss_ce = F.cross_entropy(logits_s, label_s)
+            if list(image_u_dict) != ["mixed_target"]:
+                raise RuntimeError(
+                    f"Expected one mixed target batch, got {list(image_u_dict)}"
+                )
+            target_logits = self(image_u_dict["mixed_target"])
+            probabilities = F.softmax(target_logits.float(), dim=-1)
+            loss_ent = -(
+                probabilities * probabilities.clamp_min(self.entropy_eps).log()
+            ).sum(dim=-1).mean()
+            loss_total = loss_ce + self.lambda_ent * loss_ent
+            self._ensure_finite("maple_mixed_target_entropy_total", loss_total)
+            return {
+                "loss": loss_total,
+                "source_ce": loss_ce.detach(),
+                "target_entropy": loss_ent.detach(),
+                "entropy_weight": loss_ce.new_tensor(self.lambda_ent),
+            }
         if self.pl_variant != "legacy":
             return self._forward_train_dual_pl(image_s, label_s, image_u_dict)
         logits_s = self(image_s)
@@ -1318,6 +1341,7 @@ class MaPLeMTDA(MultiTargetTrainerXU):
         maple_cfg = cfg.TRAINER.MAPLE_MTDA
         assert maple_cfg.PREC in ["fp16", "fp32", "amp"]
         assert maple_cfg.LAMBDA_PL >= 0.0
+        assert float(cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT) >= 0.0
         assert maple_cfg.LAMBDA_PL_FINAL >= 0.0
         assert maple_cfg.PL_SCHEDULE in ["constant", "cosine"]
         assert 0.0 <= maple_cfg.PL_THRESHOLD <= 1.0
@@ -1481,6 +1505,17 @@ class MaPLeMTDA(MultiTargetTrainerXU):
 
         print("Building MaPLeMTDA custom CLIP")
         self.model = CustomMaPLeMTDA(cfg, classnames, clip_model)
+        self.uses_target_training = (
+            float(cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT) > 0.0
+        )
+        if self.uses_target_training:
+            assert float(cfg.TRAINER.MAPLE_MTDA.LAMBDA_PL) == 0.0
+            assert not bool(cfg.TRAINER.MAPLE_MTDA.WEAK_PL.ENABLED)
+            assert not bool(cfg.TRAINER.MAPLE_MTDA.SELF_DISTILL.ENABLED)
+        print(
+            "MaPLe mixed-target entropy weight: "
+            f"{cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT}"
+        )
 
         print("Freezing CLIP image/text encoders; updating MaPLe prompt learner only")
         for name, param in self.model.named_parameters():

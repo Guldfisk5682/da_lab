@@ -9,9 +9,8 @@ from torch.cuda.amp import GradScaler, autocast
 from dassl.engine import TRAINER_REGISTRY
 from dassl.metrics import compute_accuracy
 from dassl.optim import build_lr_scheduler, build_optimizer
-from dassl.utils import count_num_param, load_pretrained_weights
+from dassl.utils import load_pretrained_weights
 
-from models.clip_vit import VisualEncoderAdapter, compute_patch_style, patch_tokens
 from trainers.checkpoint_utils import load_checkpoint_compat
 from trainers.cocoop import PromptLearner, TextEncoder, load_clip_to_cpu
 from trainers.mtda_base import MultiTargetTrainerXU
@@ -24,12 +23,12 @@ class CustomCLIPMTDA(nn.Module):
         self.prompt_learner = PromptLearner(cfg, classnames, clip_model)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
-        self.visual_adapter = VisualEncoderAdapter(clip_model.visual)
         self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
-        self.style_layer = cfg.TRAINER.STYLE_PROMPT.STYLE_LAYER
-        self.style_eps = cfg.TRAINER.STYLE_PROMPT.EPS
+        baseline_cfg = cfg.TRAINER.PROMPT_BASELINE_MTDA
+        self.lambda_ent = float(baseline_cfg.LAMBDA_ENT)
+        self.entropy_eps = float(baseline_cfg.ENTROPY_EPS)
         self.debug_print_once = cfg.TRAINER.COCOOP_MTDA.DEBUG.PRINT_ONCE
         self._has_printed_debug = False
 
@@ -51,20 +50,9 @@ class CustomCLIPMTDA(nn.Module):
         if not self.debug_print_once or self._has_printed_debug:
             return
 
-        hidden_s = self.visual_adapter.forward_until(image_s, self.style_layer)
-        style_s = compute_patch_style(patch_tokens(hidden_s), eps=self.style_eps)
-        target_batch_styles = OrderedDict()
         target_shapes = OrderedDict()
         for domain_name, image_u in image_u_dict.items():
-            hidden_t = self.visual_adapter.forward_until(image_u, self.style_layer)
-            style_t = compute_patch_style(patch_tokens(hidden_t), eps=self.style_eps)
-            target_batch_styles[domain_name] = style_t.mean(dim=0)
             target_shapes[domain_name] = tuple(image_u.shape)
-
-        pi_img = self.prompt_learner.meta_net(image_features)
-        pi_style = torch.zeros_like(pi_img)
-        selected_style = torch.zeros(style_s.shape[0], style_s.shape[1], device=style_s.device)
-        style_gap = torch.zeros_like(style_s)
 
         print("[CoCoOpMTDA debug]")
         print("source domain:", self.cfg.DATASET.SOURCE_DOMAINS[0])
@@ -72,18 +60,6 @@ class CustomCLIPMTDA(nn.Module):
         print("source batch shape:", tuple(image_s.shape))
         for domain_name, shape in target_shapes.items():
             print(f"target batch shape [{domain_name}]:", shape)
-        print("style_s shape:", tuple(style_s.shape))
-        for domain_name, batch_style in target_batch_styles.items():
-            print(f"target batch style shape [{domain_name}]:", tuple(batch_style.shape))
-        print(
-            "queue length per target domain:",
-            {domain_name: 0 for domain_name in image_u_dict.keys()},
-        )
-        print("selected style shape:", tuple(selected_style.shape))
-        print("style_gap shape:", tuple(style_gap.shape))
-        print("pi_img shape:", tuple(pi_img.shape))
-        print("pi_style shape:", tuple(pi_style.shape))
-        print("beta:", 0.0)
         print("logits shape:", tuple(logits.shape))
         print("loss:", float(loss.detach().item()))
         self._has_printed_debug = True
@@ -92,12 +68,28 @@ class CustomCLIPMTDA(nn.Module):
         image_features = self.image_encoder(image_s.type(self.dtype))
         logits = self._encode_logits(image_features)
         loss_ce = F.cross_entropy(logits, label_s)
-        self._build_debug_snapshot(image_s, image_u_dict, image_features, logits, loss_ce)
+        loss_ent = loss_ce.new_zeros(())
+        if self.lambda_ent > 0.0:
+            if list(image_u_dict) != ["mixed_target"]:
+                raise RuntimeError(
+                    f"Expected one mixed target batch, got {list(image_u_dict)}"
+                )
+            target_features = self.image_encoder(
+                image_u_dict["mixed_target"].type(self.dtype)
+            )
+            target_logits = self._encode_logits(target_features)
+            probabilities = F.softmax(target_logits.float(), dim=-1)
+            loss_ent = -(
+                probabilities * probabilities.clamp_min(self.entropy_eps).log()
+            ).sum(dim=-1).mean()
+        loss = loss_ce + self.lambda_ent * loss_ent
+        self._build_debug_snapshot(image_s, image_u_dict, image_features, logits, loss)
 
         acc = compute_accuracy(logits, label_s)[0].item()
         return {
-            "loss": loss_ce,
+            "loss": loss,
             "loss_ce": loss_ce.detach(),
+            "target_entropy": loss_ent.detach(),
             "acc_src": torch.tensor(acc, device=loss_ce.device),
         }
 
@@ -113,6 +105,7 @@ class CustomCLIPMTDA(nn.Module):
 class CoCoOpMTDA(MultiTargetTrainerXU):
     def check_cfg(self, cfg):
         assert cfg.TRAINER.COCOOP_MTDA.PREC in ["fp16", "fp32", "amp"]
+        assert float(cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT) >= 0.0
 
     def build_model(self):
         cfg = self.cfg
@@ -125,6 +118,9 @@ class CoCoOpMTDA(MultiTargetTrainerXU):
 
         print("Building CoCoOpMTDA")
         self.model = CustomCLIPMTDA(cfg, classnames, clip_model)
+        self.uses_target_training = (
+            float(cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT) > 0.0
+        )
 
         print("Turning off gradients in the CLIP image/text encoders")
         for name, param in self.model.named_parameters():
@@ -142,7 +138,14 @@ class CoCoOpMTDA(MultiTargetTrainerXU):
             load_pretrained_weights(self.model.prompt_learner, cfg.MODEL.INIT_WEIGHTS)
 
         self.model.to(self.device)
-        print(f"# params: {count_num_param(self.model):,}")
+        trainable_params = sum(
+            param.numel() for param in self.model.parameters() if param.requires_grad
+        )
+        print(
+            "CoCoOp mixed-target entropy weight: "
+            f"{cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT}"
+        )
+        print(f"Trainable parameter count: {trainable_params:,}")
         self.optim = build_optimizer(self.model.prompt_learner, cfg.OPTIM)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
         self.register_model("cocoop_mtda", self.model, self.optim, self.sched)
@@ -216,4 +219,3 @@ class CoCoOpMTDA(MultiTargetTrainerXU):
             loaded_epoch = checkpoint["epoch"]
             print(f'Loading weights to {name} from "{model_path}" (epoch = {loaded_epoch})')
             self._models[name].load_state_dict(state_dict, strict=False)
-
