@@ -75,6 +75,15 @@ denominator, and branch weight, but replaces the full student distribution KL
 with CE to the detached student top-1. Run C2APR seed100 only before choosing
 the variant for full Office-Home experiments.
 
+This C2APR seed100 control was launched on GPU0 at 2026-07-15 16:42 CST in the
+remote diagnostic worktree. Monitor it with:
+
+```text
+screen: student_top1_C_gpu0
+log: logs/student_top1_control_20260715/C_gpu0.log
+output tag: maple_dualpl_agreement_hard_student_top1_seed100
+```
+
 The earlier AD-CLIP-like/TSSP route is no longer the main line. Preserve it as
 context, but do not spend more compute there unless the user explicitly asks.
 
