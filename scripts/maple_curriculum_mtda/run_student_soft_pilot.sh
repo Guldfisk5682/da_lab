@@ -6,7 +6,7 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 cd "${REPO_ROOT}"
 
 if [ "$#" -ne 2 ]; then
-  echo "Usage: bash $0 <A|C> <seed>" >&2
+  echo "Usage: bash $0 <A|C|P|R> <seed>" >&2
   exit 2
 fi
 
@@ -15,7 +15,9 @@ SEED="$2"
 case "${SOURCE}" in
   A) ORDER="clipart product real_world"; TARGET_TAG="CPR" ;;
   C) ORDER="art real_world product"; TARGET_TAG="APR" ;;
-  *) echo "Student-soft pilot supports A or C, got ${SOURCE}" >&2; exit 2 ;;
+  P) ORDER="clipart art real_world"; TARGET_TAG="ACR" ;;
+  R) ORDER="clipart art product"; TARGET_TAG="ACP" ;;
+  *) echo "Student-soft experiment expects A, C, P, or R; got ${SOURCE}" >&2; exit 2 ;;
 esac
 
 METHOD_TAG="maple_dualpl_agreement_hard_student_soft_seed${SEED}"

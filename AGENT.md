@@ -84,6 +84,23 @@ log: logs/student_top1_control_20260715/C_gpu0.log
 output tag: maple_dualpl_agreement_hard_student_top1_seed100
 ```
 
+The top-1 control completed at 88.86 (A/P/R = 84.14/91.48/90.96), versus
+agreement-hard 88.69 and full-distribution student-soft 89.06. The KL version
+is selected for full Office-Home. The key mechanism evidence is that top-1 had
+an equal or cleaner replay bank but lost 0.49 Art points during the final
+Product stage, while KL gained 1.20 Art points over that same boundary. Thus
+the KL advantage is not explained by replay-label quality; retaining the full
+student distribution improves cross-domain compatibility/retention.
+
+Full seed100 H2E orders are:
+
+```text
+A2CPR: clipart -> product -> real_world
+C2APR: art -> real_world -> product
+P2ACR: clipart -> art -> real_world
+R2ACP: clipart -> art -> product
+```
+
 The earlier AD-CLIP-like/TSSP route is no longer the main line. Preserve it as
 context, but do not spend more compute there unless the user explicitly asks.
 
