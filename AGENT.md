@@ -1545,3 +1545,27 @@ its per-batch ViT-B/16 proxy TTA. Report ProDe adaptation-only and end-to-end
 budgets separately. Its 88.16 mean versus our 85.23 is therefore not a
 parameter- or compute-matched comparison; DAMP reaches 85.16 with substantially
 more parameters and sample exposure than ours.
+
+### Efficient prompt baseline launch, seed 100 (2026-07-16)
+
+CoOp, CoCoOp, and original discrete MaPLe now have two controlled
+Office-Home source-to-rest protocols. `source_only` optimizes labeled-source CE
+and does not build a target training loader. `mt_ent` uses one concatenated,
+domain-identity-free target loader and adds conditional entropy with fixed
+weight 0.1 to source CE. Both preserve each upstream method's ViT-B/16 prompt
+structure, freezing policy, batch size, optimizer, learning-rate schedule, and
+epoch count. Neither protocol contains pseudo labels, curriculum stages,
+replay, teachers, or changes to prompt capacity. Source-sized iteration counts
+are preserved and every run logs its trainable parameter count and optimizer
+step budget.
+
+All six source-only/MT-Ent forward paths passed remote smoke tests, including
+positive target entropy only in MT-Ent. Two resumable 12-run queues were
+launched at approximately 07:09 CST: source-only on GPU 0 (queue PID 3063466)
+and MT-Ent on GPU 1 (queue PID 3063467). Each queue runs MaPLe A/C/P/R, then
+CoOp A/C/P/R, then CoCoOp A/C/P/R, all at seed 100. Logs and PID files are under
+`logs/prompt_baselines_mtda`; results are under
+`output/officehome_prompt_baselines`. Initial stable MaPLe step time was about
+0.128 s for source-only and 0.23 s for MT-Ent. Including the substantially
+longer original CoOp/CoCoOp budgets, conservative queue completion windows are
+13:30-14:30 CST for source-only and 20:30-22:00 CST for MT-Ent on 2026-07-16.
