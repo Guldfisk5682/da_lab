@@ -101,6 +101,15 @@ P2ACR: clipart -> art -> real_world
 R2ACP: clipart -> art -> product
 ```
 
+P2ACR and R2ACP seed100 full-distribution KL runs were launched in parallel at
+2026-07-15 17:36 CST. A2CPR and C2APR seed100 are already complete.
+
+```text
+P2ACR screen/log: student_soft_P_gpu0 / logs/student_soft_full_seed100_20260715/P_gpu0.log
+R2ACP screen/log: student_soft_R_gpu1 / logs/student_soft_full_seed100_20260715/R_gpu1.log
+method tag: maple_dualpl_agreement_hard_student_soft_seed100
+```
+
 The earlier AD-CLIP-like/TSSP route is no longer the main line. Preserve it as
 context, but do not spend more compute there unless the user explicitly asks.
 
