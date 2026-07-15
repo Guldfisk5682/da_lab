@@ -55,9 +55,22 @@ run_one() {
   echo "Completed ${source}2${target_tag} ${variant} seed${SEED}"
 }
 
-run_one A "clipart product real_world" agreement_hard
-run_one A "clipart product real_world" agreement_hard_soft
-run_one C "art real_world product" agreement_hard
-run_one C "art real_world product" agreement_hard_soft
+PILOT_SOURCES="${PILOT_SOURCES:-A C}"
+for source in ${PILOT_SOURCES}; do
+  case "${source}" in
+    A)
+      run_one A "clipart product real_world" agreement_hard
+      run_one A "clipart product real_world" agreement_hard_soft
+      ;;
+    C)
+      run_one C "art real_world product" agreement_hard
+      run_one C "art real_world product" agreement_hard_soft
+      ;;
+    *)
+      echo "Unsupported PILOT_SOURCES entry: ${source}" >&2
+      exit 2
+      ;;
+  esac
+done
 
 echo "Dual-view PL pilot completed successfully"
