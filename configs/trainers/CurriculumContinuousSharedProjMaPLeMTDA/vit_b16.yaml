@@ -49,9 +49,10 @@ TRAINER:
     PL_THRESHOLD: 0.7
     PL_STUDENT_THRESHOLD: 0.7
     PL_USE_STUDENT_LOW_CONF_MASK: true
-    PL_VARIANT: "legacy" # legacy | agreement_hard | agreement_hard_soft
+    PL_VARIANT: "legacy" # legacy | agreement_hard | agreement_hard_soft | agreement_hard_student_soft
     PL_DUAL_CONF_THRESHOLD: 0.7
     PL_SOFT_BETA: 1.0
+    PL_STUDENT_SOFT_LAMBDA: 0.5
     PL_STRONG_AUGMENT: "randaugment_fixmatch"
     PL_DIAGNOSTIC_WINDOW: 50
     PL_GRAD_AUDIT_INTERVAL: 50

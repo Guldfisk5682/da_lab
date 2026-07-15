@@ -234,6 +234,10 @@ class CustomMaPLeMTDA(nn.Module):
             f"{self.pl_dual_conf_threshold}"
         )
         print(f"{log_prefix} soft pseudo-label beta: {self.pl_soft_beta}")
+        print(
+            f"{log_prefix} student-soft weight: "
+            f"{self.pl_student_soft_lambda}"
+        )
         print(f"{log_prefix} weak PL enabled: {self.weak_pl_enabled}")
         print(f"{log_prefix} weak PL weight: {self.lambda_weak_pl}")
         print(
@@ -272,6 +276,7 @@ class CustomMaPLeMTDA(nn.Module):
         self.pl_variant = str(maple_cfg.PL_VARIANT).lower()
         self.pl_dual_conf_threshold = float(maple_cfg.PL_DUAL_CONF_THRESHOLD)
         self.pl_soft_beta = float(maple_cfg.PL_SOFT_BETA)
+        self.pl_student_soft_lambda = float(maple_cfg.PL_STUDENT_SOFT_LAMBDA)
 
     def _init_weak_pl_config(self, maple_cfg):
         weak_cfg = maple_cfg.WEAK_PL
@@ -432,19 +437,38 @@ class CustomMaPLeMTDA(nn.Module):
         )
         agreement = teacher_label.eq(student_label)
         hard_mask = high_conf & agreement
-        soft_mask = high_conf & ~agreement
+        if self.pl_variant == "agreement_hard_student_soft":
+            soft_mask = student_conf.ge(self.pl_dual_conf_threshold) & teacher_conf.lt(
+                self.pl_dual_conf_threshold
+            )
+            soft_target = student_probs.detach()
+            soft_weight = (
+                (student_conf - self.pl_dual_conf_threshold)
+                / max(1.0 - self.pl_dual_conf_threshold, 1e-12)
+            ).clamp_(0.0, 1.0)
+            soft_per_sample = F.kl_div(
+                F.log_softmax(strong_logits.float(), dim=-1),
+                soft_target,
+                reduction="none",
+            ).sum(dim=-1)
+            soft_label = student_label
+        else:
+            soft_mask = high_conf & ~agreement
+            soft_target = (0.5 * (teacher_probs + student_probs)).detach()
+            soft_weight = torch.ones_like(student_conf)
+            soft_per_sample = -(
+                soft_target * F.log_softmax(strong_logits.float(), dim=-1)
+            ).sum(dim=-1)
+            soft_label = soft_target.argmax(dim=-1)
         if self.pl_variant == "agreement_hard":
             soft_mask = torch.zeros_like(soft_mask)
 
         hard_per_sample = F.cross_entropy(
             strong_logits.float(), teacher_label, reduction="none"
         )
-        soft_target = (0.5 * (teacher_probs + student_probs)).detach()
-        soft_per_sample = -(
-            soft_target * F.log_softmax(strong_logits.float(), dim=-1)
-        ).sum(dim=-1)
         hard_sum = (hard_per_sample * hard_mask.float()).sum()
-        soft_sum = (soft_per_sample * soft_mask.float()).sum()
+        selected_soft_weight = soft_weight * soft_mask.float()
+        soft_sum = (soft_per_sample * selected_soft_weight).sum()
 
         # Counterfactual coverage under the old one-teacher PL gate. This does
         # not affect optimization and makes comparisons with legacy runs direct.
@@ -458,6 +482,7 @@ class CustomMaPLeMTDA(nn.Module):
             "soft_sum": soft_sum,
             "hard_count": hard_mask.float().sum(),
             "soft_count": soft_mask.float().sum(),
+            "soft_weight_sum": selected_soft_weight.sum(),
             "high_count": high_conf.float().sum(),
             "old_count": old_mask.float().sum(),
             "total_count": strong_logits.new_tensor(float(strong_logits.shape[0])),
@@ -467,15 +492,17 @@ class CustomMaPLeMTDA(nn.Module):
             "soft_entropy_sum": (soft_entropy * soft_mask.float()).sum(),
         }
         if true_label is not None:
-            mixture_label = soft_target.argmax(dim=-1)
             result.update(
                 {
                     "hard_correct_count": (
                         teacher_label.eq(true_label) & hard_mask
                     ).float().sum(),
                     "soft_correct_count": (
-                        mixture_label.eq(true_label) & soft_mask
+                        soft_label.eq(true_label) & soft_mask
                     ).float().sum(),
+                    "soft_weighted_correct_sum": (
+                        soft_label.eq(true_label).float() * selected_soft_weight
+                    ).sum(),
                 }
             )
         return result
@@ -511,11 +538,22 @@ class CustomMaPLeMTDA(nn.Module):
 
         hard_count = total("hard_count")
         soft_count = total("soft_count")
+        soft_weight_sum = total("soft_weight_sum")
         total_count = total("total_count").clamp_min(1.0)
         loss_hard = total("hard_sum") / hard_count.clamp_min(1.0)
-        loss_soft = total("soft_sum") / soft_count.clamp_min(1.0)
-        loss_pl = loss_hard + self.pl_soft_beta * loss_soft
-        loss_total = loss_ce + lambda_pl_current * loss_pl
+        if self.pl_variant == "agreement_hard_student_soft":
+            # The fixed target-batch denominator makes a rare soft candidate's
+            # contribution proportional to its confidence weight. No selected-
+            # count division (and therefore no divide-by-zero branch) is needed.
+            loss_soft = total("soft_sum") / total_count
+            weighted_soft = self.pl_student_soft_lambda * loss_soft
+            loss_pl = loss_hard + loss_soft
+        else:
+            loss_soft = total("soft_sum") / soft_count.clamp_min(1.0)
+            weighted_soft = lambda_pl_current * self.pl_soft_beta * loss_soft
+            loss_pl = loss_hard + self.pl_soft_beta * loss_soft
+        weighted_hard = lambda_pl_current * loss_hard
+        loss_total = loss_ce + weighted_hard + weighted_soft
         self._ensure_finite("maple_dual_pl_total", loss_total)
 
         selected_count = hard_count + soft_count
@@ -525,18 +563,28 @@ class CustomMaPLeMTDA(nn.Module):
             "loss_pl": loss_pl.detach(),
             "loss_pl_hard": loss_hard.detach(),
             "loss_pl_soft": loss_soft.detach(),
-            "weighted_loss_pl": (lambda_pl_current * loss_pl).detach(),
-            "weighted_loss_pl_hard": (lambda_pl_current * loss_hard).detach(),
-            "weighted_loss_pl_soft": (
-                lambda_pl_current * self.pl_soft_beta * loss_soft
-            ).detach(),
+            "weighted_loss_pl": (weighted_hard + weighted_soft).detach(),
+            "weighted_loss_pl_hard": weighted_hard.detach(),
+            "weighted_loss_pl_soft": weighted_soft.detach(),
             "lambda_pl_current": loss_ce.new_tensor(lambda_pl_current),
+            "pl_student_soft_lambda": loss_ce.new_tensor(
+                self.pl_student_soft_lambda
+                if self.pl_variant == "agreement_hard_student_soft"
+                else 0.0
+            ),
             "pl_hard_count": hard_count.detach(),
             "pl_soft_count": soft_count.detach(),
+            "pl_soft_weight_sum": soft_weight_sum.detach(),
             "pl_selected_count": selected_count.detach(),
             "pl_total_count": total_count.detach(),
             "pl_hard_coverage": (hard_count / total_count).detach(),
             "pl_soft_coverage": (soft_count / total_count).detach(),
+            "pl_soft_effective_coverage": (
+                soft_weight_sum / total_count
+            ).detach(),
+            "pl_soft_mean_weight": (
+                soft_weight_sum / soft_count.clamp_min(1.0)
+            ).detach(),
             "pl_coverage": (selected_count / total_count).detach(),
             "pl_dual_high_coverage": (total("high_count") / total_count).detach(),
             "pl_ignored_coverage": (1.0 - selected_count / total_count).detach(),
@@ -554,10 +602,8 @@ class CustomMaPLeMTDA(nn.Module):
             "pl_hard_active": hard_count.gt(0).float().detach(),
             "pl_soft_active": soft_count.gt(0).float().detach(),
             "_source_ce_objective": loss_ce,
-            "_pl_hard_objective": lambda_pl_current * loss_hard,
-            "_pl_soft_objective": (
-                lambda_pl_current * self.pl_soft_beta * loss_soft
-            ),
+            "_pl_hard_objective": weighted_hard,
+            "_pl_soft_objective": weighted_soft,
         }
         if "hard_correct_count" in terms[0]:
             outputs.update(
@@ -569,7 +615,17 @@ class CustomMaPLeMTDA(nn.Module):
                     "pl_soft_argmax_true_accuracy": (
                         total("soft_correct_count") / soft_count.clamp_min(1.0)
                     ).detach(),
+                    "pl_student_soft_true_accuracy": (
+                        total("soft_correct_count") / soft_count.clamp_min(1.0)
+                    ).detach(),
                     "pl_soft_correct_count": total("soft_correct_count").detach(),
+                    "pl_soft_weighted_true_accuracy": (
+                        total("soft_weighted_correct_sum")
+                        / soft_weight_sum.clamp_min(1.0)
+                    ).detach(),
+                    "pl_soft_weighted_correct_sum": total(
+                        "soft_weighted_correct_sum"
+                    ).detach(),
                 }
             )
         return outputs
@@ -1252,9 +1308,11 @@ class MaPLeMTDA(MultiTargetTrainerXU):
             "legacy",
             "agreement_hard",
             "agreement_hard_soft",
+            "agreement_hard_student_soft",
         }
         assert 0.0 <= float(maple_cfg.PL_DUAL_CONF_THRESHOLD) <= 1.0
         assert float(maple_cfg.PL_SOFT_BETA) >= 0.0
+        assert float(maple_cfg.PL_STUDENT_SOFT_LAMBDA) >= 0.0
         assert int(maple_cfg.PL_DIAGNOSTIC_WINDOW) > 0
         assert int(maple_cfg.PL_GRAD_AUDIT_INTERVAL) > 0
         assert 0.0 <= maple_cfg.SELF_DISTILL.OLD_CONF_LOW <= 1.0

@@ -166,6 +166,7 @@ def _dual_pl_model(variant):
     model.pl_threshold = 0.7
     model.pl_student_threshold = 0.7
     model.pl_use_student_low_conf_mask = True
+    model.pl_student_soft_lambda = 0.5
     return model
 
 
@@ -201,6 +202,37 @@ def test_hard_only_control_drops_disagreement_without_changing_hard_gate():
     terms = model._dual_view_pseudo_label_terms(strong, student, teacher)
     assert terms["hard_count"].item() == 1
     assert terms["soft_count"].item() == 0
+
+
+def test_student_soft_uses_student_high_teacher_low_and_linear_confidence_weight():
+    model = _dual_pl_model("agreement_hard_student_soft")
+    strong = torch.tensor(
+        [[0.2, -0.2], [1.0, -1.0], [-0.5, 0.5]], requires_grad=True
+    )
+    # Only sample 0 qualifies: student confidence 0.8 and teacher confidence 0.6.
+    teacher = torch.log(torch.tensor([[0.6, 0.4], [0.8, 0.2], [0.8, 0.2]]))
+    student = torch.log(
+        torch.tensor([[0.8, 0.2], [0.1, 0.9], [0.6, 0.4]])
+    ).requires_grad_()
+    terms = model._dual_view_pseudo_label_terms(
+        strong, student, teacher, true_label=torch.tensor([0, 1, 0])
+    )
+    expected_weight = (0.8 - 0.7) / 0.3
+    expected_kl = torch.nn.functional.kl_div(
+        torch.log_softmax(strong[0], dim=-1),
+        torch.tensor([0.8, 0.2]),
+        reduction="sum",
+    )
+    assert terms["hard_count"].item() == 0
+    assert terms["soft_count"].item() == 1
+    assert terms["soft_weight_sum"].item() == pytest.approx(expected_weight)
+    assert terms["soft_sum"].item() == pytest.approx(
+        expected_weight * expected_kl.item()
+    )
+    assert terms["soft_correct_count"].item() == 1
+    terms["soft_sum"].backward()
+    assert strong.grad is not None
+    assert student.grad is None
 
 
 def test_stage_local_schedule_gives_equal_lr_budget_to_each_virtual_epoch():

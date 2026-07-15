@@ -1304,3 +1304,36 @@ calibrated disagreement rule. Any replacement must demonstrate offline
 candidate accuracy materially closer to agreement-hard, and rare branches
 must use an explicit update budget or sample-count-aware coefficient so one
 uncertain sample cannot silently receive a full auxiliary-loss branch.
+
+## Confidence-Weighted Student Soft Consistency (approved 2026-07-15)
+
+The next two-run pilot keeps agreement-hard unchanged and adds only samples
+where student confidence is at least `0.7` while frozen-CLIP confidence is
+below `0.7`. Student probabilities on the standard lightly augmented image
+are detached and supervise the same image under the stronger RandAugment
+training transform using KL divergence. Frozen CLIP gates this region but does
+not contribute to the soft target. Both-low-confidence samples and both-high-
+confidence disagreements remain ignored.
+
+For each selected sample, use the explicit linear confidence weight
+
+```text
+w_i = clamp((student_conf_i - 0.7) / 0.3, 0, 1).
+```
+
+The approved loss is computed directly with the actual target images in the
+optimizer step (`B_u`, currently 12):
+
+```text
+L_soft = sum_i(w_i * KL(detach(p_student_light_i) || p_student_strong_i)) / B_u
+L_total = L_source + 0.3 * L_hard + 0.5 * L_soft + 0.75 * L_replay
+```
+
+Do not separately divide by `sum_i(w_i)` inside the training graph. This avoids
+both divide-by-zero handling and giving a single rare sample a full branch
+coefficient. Log `sum_i(w_i) / B_u` as weighted effective coverage, plus raw
+coverage, unweighted/weighted true accuracy, accumulated soft loss, and branch
+gradient diagnostics. No EMA count smoothing, temperature search, teacher
+mixture, or low-confidence consistency is allowed in this pilot. Run only
+A2CPR and C2APR seed100, in parallel if both GPUs are available, and compare
+against the completed agreement-hard runs without rerunning them.

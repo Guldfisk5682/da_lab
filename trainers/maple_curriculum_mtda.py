@@ -667,6 +667,31 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                     and not agreement
                     and self.model.pl_variant == "agreement_hard_soft"
                 )
+                student_soft = (
+                    self.model.pl_variant == "agreement_hard_student_soft"
+                    and float(record["student_conf"])
+                    >= float(self.model.pl_dual_conf_threshold)
+                    and float(record["clip_conf"])
+                    < float(self.model.pl_dual_conf_threshold)
+                )
+                student_soft_weight = (
+                    max(
+                        0.0,
+                        min(
+                            1.0,
+                            (
+                                float(record["student_conf"])
+                                - float(self.model.pl_dual_conf_threshold)
+                            )
+                            / max(
+                                1.0 - float(self.model.pl_dual_conf_threshold),
+                                1e-12,
+                            ),
+                        ),
+                    )
+                    if student_soft
+                    else 0.0
+                )
                 payload.update(
                     {
                         "boundary_stage": int(stage),
@@ -682,7 +707,11 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                         "dual_high_conf": bool(dual_high),
                         "dual_hard_selected": bool(dual_hard),
                         "dual_soft_selected": bool(dual_soft),
-                        "dual_pl_selected": bool(dual_hard or dual_soft),
+                        "student_soft_selected": bool(student_soft),
+                        "student_soft_weight": float(student_soft_weight),
+                        "dual_pl_selected": bool(
+                            dual_hard or dual_soft or student_soft
+                        ),
                         "mixture_correct": bool(
                             int(record["mixture_label"])
                             == int(record["true_label"])
@@ -1273,9 +1302,11 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             "pl_total_count",
             "pl_hard_count",
             "pl_soft_count",
+            "pl_soft_weight_sum",
             "pl_selected_count",
             "pl_hard_correct_count",
             "pl_soft_correct_count",
+            "pl_soft_weighted_correct_sum",
             "weighted_loss_pl_hard",
             "weighted_loss_pl_soft",
             "source_gradient_norm",
@@ -1298,6 +1329,9 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         total = max(float(payload.get("pl_total_count", 0.0)), 1.0)
         payload["hard_coverage"] = float(payload.get("pl_hard_count", 0.0)) / total
         payload["soft_coverage"] = float(payload.get("pl_soft_count", 0.0)) / total
+        payload["soft_effective_coverage"] = float(
+            payload.get("pl_soft_weight_sum", 0.0)
+        ) / total
         payload["selected_coverage"] = float(
             payload.get("pl_selected_count", 0.0)
         ) / total
@@ -1307,6 +1341,9 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         payload["soft_argmax_true_accuracy"] = float(
             payload.get("pl_soft_correct_count", 0.0)
         ) / max(float(payload.get("pl_soft_count", 0.0)), 1.0)
+        payload["soft_weighted_true_accuracy"] = float(
+            payload.get("pl_soft_weighted_correct_sum", 0.0)
+        ) / max(float(payload.get("pl_soft_weight_sum", 0.0)), 1.0)
         audits = max(int(payload.get("gradient_audits", 0)), 1)
         for field in (
             "source_gradient_norm",

@@ -246,6 +246,10 @@ class CustomContinuousMaPLeMTDA(CustomMaPLeMTDA):
             f"{self.pl_dual_conf_threshold}"
         )
         print(f"{self.log_prefix} soft pseudo-label beta: {self.pl_soft_beta}")
+        print(
+            f"{self.log_prefix} student-soft weight: "
+            f"{self.pl_student_soft_lambda}"
+        )
         print(f"{self.log_prefix} weak PL enabled: {self.weak_pl_enabled}")
         print(f"{self.log_prefix} weak PL weight: {self.lambda_weak_pl}")
         print(
