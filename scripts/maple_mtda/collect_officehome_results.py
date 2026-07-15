@@ -76,14 +76,20 @@ def summarize_accs(accs, allow_incomplete=False):
     return macro, complete, len(present)
 
 
-def main():
-    args = parse_args()
-    csv_path, md_path = output_paths(args.seeds)
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    rows = []
+def resolve_method_dirs(output_root, method_tags=None):
+    if method_tags:
+        method_dirs = [output_root / tag for tag in method_tags]
+        missing = sorted(path.name for path in method_dirs if not path.is_dir())
+        if missing:
+            raise FileNotFoundError(
+                "Requested method directories not found under "
+                f"{output_root}: {', '.join(missing)}"
+            )
+        return method_dirs
 
-    method_dirs = [
-        path for path in sorted(OUTPUT_ROOT.iterdir())
+    return [
+        path
+        for path in sorted(output_root.iterdir())
         if path.is_dir()
         and path.name.startswith(
             (
@@ -94,16 +100,15 @@ def main():
             )
         )
     ]
-    if args.method_tags:
-        requested = set(args.method_tags)
-        method_dirs = [path for path in method_dirs if path.name in requested]
-        found = {path.name for path in method_dirs}
-        missing = sorted(requested - found)
-        if missing:
-            raise FileNotFoundError(
-                "Requested method directories not found under "
-                f"{OUTPUT_ROOT}: {', '.join(missing)}"
-            )
+
+
+def main():
+    args = parse_args()
+    csv_path, md_path = output_paths(args.seeds)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    rows = []
+
+    method_dirs = resolve_method_dirs(OUTPUT_ROOT, args.method_tags)
     for method_dir in method_dirs:
         for seed in args.seeds:
             for source, targets in SOURCES.items():

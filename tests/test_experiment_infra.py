@@ -5,7 +5,10 @@ import pytest
 import torch
 
 from scripts import experiment_guard
-from scripts.maple_mtda.collect_officehome_results import summarize_accs
+from scripts.maple_mtda.collect_officehome_results import (
+    resolve_method_dirs,
+    summarize_accs,
+)
 from trainers.checkpoint_utils import load_state_dict_checked
 from trainers.maple_mtda import build_self_distill_mask
 
@@ -48,6 +51,15 @@ def test_incomplete_results_are_not_summarized_by_default():
     assert macro is None
     assert complete is False
     assert found == 2
+
+
+def test_explicit_result_tag_is_not_limited_by_discovery_prefixes(tmp_path):
+    method_dir = tmp_path / "maple_dualpl_new_method"
+    method_dir.mkdir()
+    assert resolve_method_dirs(tmp_path, [method_dir.name]) == [method_dir]
+
+    with pytest.raises(FileNotFoundError, match="missing_method"):
+        resolve_method_dirs(tmp_path, ["missing_method"])
 
     macro, complete, found = summarize_accs(
         [80.0, None, 90.0], allow_incomplete=True

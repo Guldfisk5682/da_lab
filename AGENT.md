@@ -110,6 +110,21 @@ R2ACP screen/log: student_soft_R_gpu1 / logs/student_soft_full_seed100_20260715/
 method tag: maple_dualpl_agreement_hard_student_soft_seed100
 ```
 
+All four seed100 runs are complete:
+
+```text
+A2CPR: C 74.02 / P 91.66 / R 91.03 = 85.57
+C2APR: A 84.80 / P 91.62 / R 90.75 = 89.06
+P2ACR: A 83.85 / C 73.49 / R 91.19 = 82.84
+R2ACP: A 84.84 / C 73.20 / P 92.34 = 83.46
+Office-Home 12-task mean: 85.23
+```
+
+The result collector previously rejected explicitly requested method tags that
+did not match its historical discovery prefixes. Explicit tags now resolve
+directly under the output root, while automatic discovery keeps the legacy
+prefix filter.
+
 The earlier AD-CLIP-like/TSSP route is no longer the main line. Preserve it as
 context, but do not spend more compute there unless the user explicitly asks.
 
