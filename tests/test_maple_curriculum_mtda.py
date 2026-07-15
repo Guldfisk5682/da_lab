@@ -235,6 +235,40 @@ def test_student_soft_uses_student_high_teacher_low_and_linear_confidence_weight
     assert student.grad is None
 
 
+def test_student_top1_control_changes_only_the_target_distribution():
+    soft_model = _dual_pl_model("agreement_hard_student_soft")
+    top1_model = _dual_pl_model("agreement_hard_student_top1")
+    strong = torch.tensor([[0.2, -0.2], [1.0, -1.0]], requires_grad=True)
+    teacher = torch.log(torch.tensor([[0.6, 0.4], [0.8, 0.2]]))
+    student = torch.log(torch.tensor([[0.8, 0.2], [0.1, 0.9]])).requires_grad_()
+
+    soft_terms = soft_model._dual_view_pseudo_label_terms(
+        strong, student, teacher, true_label=torch.tensor([0, 1])
+    )
+    top1_terms = top1_model._dual_view_pseudo_label_terms(
+        strong, student, teacher, true_label=torch.tensor([0, 1])
+    )
+
+    expected_weight = (0.8 - 0.7) / 0.3
+    expected_ce = torch.nn.functional.cross_entropy(
+        strong[0].unsqueeze(0), torch.tensor([0]), reduction="sum"
+    )
+    assert top1_terms["hard_count"].item() == soft_terms["hard_count"].item()
+    assert top1_terms["soft_count"].item() == soft_terms["soft_count"].item()
+    assert top1_terms["soft_weight_sum"].item() == pytest.approx(
+        soft_terms["soft_weight_sum"].item()
+    )
+    assert top1_terms["soft_sum"].item() == pytest.approx(
+        expected_weight * expected_ce.item()
+    )
+    assert top1_terms["soft_sum"].item() != pytest.approx(
+        soft_terms["soft_sum"].item()
+    )
+    top1_terms["soft_sum"].backward()
+    assert strong.grad is not None
+    assert student.grad is None
+
+
 def test_stage_local_schedule_gives_equal_lr_budget_to_each_virtual_epoch():
     indices = [stage_local_schedule_index(step, 1010, 5) for step in range(1010)]
     assert [indices.count(index) for index in range(5)] == [202] * 5

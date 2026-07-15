@@ -32,8 +32,48 @@ Dataset: Office-Home
 Protocol: source-available closed-set SS-MTDA
 Backbone: CLIP ViT-B/16
 Main route: MaPLe-like multi-modal prompt tuning + frozen-CLIP pseudo labels
-Current extension: post-PL old-student self-distillation for weak/mid-confidence regions
+Current extension: agreement-hard PL plus confidence-weighted student consistency
 ```
+
+## Active Status (2026-07-15)
+
+The main PL candidate now uses two disjoint target subsets during curriculum
+training:
+
+```text
+agreement-hard:
+  frozen CLIP conf >= 0.7, student conf >= 0.7, same top-1
+  hard CE weight = 0.3
+
+student-soft:
+  student conf >= 0.7, frozen CLIP conf < 0.7
+  detached student weak-view distribution supervises the strong view with KL
+  sample weight = clip((student_conf - 0.7) / 0.3, 0, 1)
+  loss = sum(weight_i * KL_i) / actual target batch size
+  branch weight = 0.5
+```
+
+Both use stateful H2E curriculum plus online TopK8 pseudo-label replay, full
+cycle traversal, and replay weight 0.75. Seed100 pilot results are:
+
+```text
+A2CPR agreement-hard: 74.02 / 91.53 / 90.68 = 85.41
+A2CPR + student-soft: 74.02 / 91.66 / 91.03 = 85.57 (+0.16)
+C2APR agreement-hard: 84.14 / 91.53 / 90.41 = 88.69
+C2APR + student-soft: 84.80 / 91.62 / 90.75 = 89.06 (+0.37)
+```
+
+Log analysis found no target-domain regression across these six comparisons.
+Student-soft raw coverage is about 4.3% in the first stage and 9.6-11.8% in
+later stages; confidence weighting raises diagnostic argmax accuracy by about
+5-6 points. It is nearly inactive in the first 100 optimizer steps, so it does
+not replace the initial agreement-hard signal.
+
+The immediate mechanism control is `agreement_hard_student_top1`: it keeps the
+same student-high/frozen-CLIP-low mask, confidence weights, target-batch
+denominator, and branch weight, but replaces the full student distribution KL
+with CE to the detached student top-1. Run C2APR seed100 only before choosing
+the variant for full Office-Home experiments.
 
 The earlier AD-CLIP-like/TSSP route is no longer the main line. Preserve it as
 context, but do not spend more compute there unless the user explicitly asks.

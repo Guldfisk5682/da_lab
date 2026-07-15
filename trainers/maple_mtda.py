@@ -437,7 +437,10 @@ class CustomMaPLeMTDA(nn.Module):
         )
         agreement = teacher_label.eq(student_label)
         hard_mask = high_conf & agreement
-        if self.pl_variant == "agreement_hard_student_soft":
+        if self.pl_variant in {
+            "agreement_hard_student_soft",
+            "agreement_hard_student_top1",
+        }:
             soft_mask = student_conf.ge(self.pl_dual_conf_threshold) & teacher_conf.lt(
                 self.pl_dual_conf_threshold
             )
@@ -446,12 +449,20 @@ class CustomMaPLeMTDA(nn.Module):
                 (student_conf - self.pl_dual_conf_threshold)
                 / max(1.0 - self.pl_dual_conf_threshold, 1e-12)
             ).clamp_(0.0, 1.0)
-            soft_per_sample = F.kl_div(
-                F.log_softmax(strong_logits.float(), dim=-1),
-                soft_target,
-                reduction="none",
-            ).sum(dim=-1)
             soft_label = student_label
+            if self.pl_variant == "agreement_hard_student_soft":
+                soft_per_sample = F.kl_div(
+                    F.log_softmax(strong_logits.float(), dim=-1),
+                    soft_target,
+                    reduction="none",
+                ).sum(dim=-1)
+            else:
+                # Mechanism control: keep the student-high/teacher-low mask,
+                # confidence weights, and target-batch denominator unchanged,
+                # but discard the student's non-top-1 probability mass.
+                soft_per_sample = F.cross_entropy(
+                    strong_logits.float(), student_label, reduction="none"
+                )
         else:
             soft_mask = high_conf & ~agreement
             soft_target = (0.5 * (teacher_probs + student_probs)).detach()
@@ -541,7 +552,10 @@ class CustomMaPLeMTDA(nn.Module):
         soft_weight_sum = total("soft_weight_sum")
         total_count = total("total_count").clamp_min(1.0)
         loss_hard = total("hard_sum") / hard_count.clamp_min(1.0)
-        if self.pl_variant == "agreement_hard_student_soft":
+        if self.pl_variant in {
+            "agreement_hard_student_soft",
+            "agreement_hard_student_top1",
+        }:
             # The fixed target-batch denominator makes a rare soft candidate's
             # contribution proportional to its confidence weight. No selected-
             # count division (and therefore no divide-by-zero branch) is needed.
@@ -569,7 +583,11 @@ class CustomMaPLeMTDA(nn.Module):
             "lambda_pl_current": loss_ce.new_tensor(lambda_pl_current),
             "pl_student_soft_lambda": loss_ce.new_tensor(
                 self.pl_student_soft_lambda
-                if self.pl_variant == "agreement_hard_student_soft"
+                if self.pl_variant
+                in {
+                    "agreement_hard_student_soft",
+                    "agreement_hard_student_top1",
+                }
                 else 0.0
             ),
             "pl_hard_count": hard_count.detach(),
@@ -1309,6 +1327,7 @@ class MaPLeMTDA(MultiTargetTrainerXU):
             "agreement_hard",
             "agreement_hard_soft",
             "agreement_hard_student_soft",
+            "agreement_hard_student_top1",
         }
         assert 0.0 <= float(maple_cfg.PL_DUAL_CONF_THRESHOLD) <= 1.0
         assert float(maple_cfg.PL_SOFT_BETA) >= 0.0

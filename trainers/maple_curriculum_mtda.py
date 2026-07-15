@@ -668,7 +668,11 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                     and self.model.pl_variant == "agreement_hard_soft"
                 )
                 student_soft = (
-                    self.model.pl_variant == "agreement_hard_student_soft"
+                    self.model.pl_variant
+                    in {
+                        "agreement_hard_student_soft",
+                        "agreement_hard_student_top1",
+                    }
                     and float(record["student_conf"])
                     >= float(self.model.pl_dual_conf_threshold)
                     and float(record["clip_conf"])
