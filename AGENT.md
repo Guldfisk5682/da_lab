@@ -1569,3 +1569,13 @@ CoOp A/C/P/R, then CoCoOp A/C/P/R, all at seed 100. Logs and PID files are under
 0.128 s for source-only and 0.23 s for MT-Ent. Including the substantially
 longer original CoOp/CoCoOp budgets, conservative queue completion windows are
 13:30-14:30 CST for source-only and 20:30-22:00 CST for MT-Ent on 2026-07-16.
+
+The two queues above were stopped on user request before baseline completion;
+all partial artifacts were preserved and both GPUs returned idle. Reproduction
+budgets were then revised for efficiency: CoOp keeps batch 32 but is reduced
+from 200 to 10 epochs, CoCoOp keeps 10 epochs and increases batch 1 to 8, and
+MaPLe keeps 5 epochs and increases batch 4 to 8. Thus CoOp and CoCoOp each make
+10 passes over the source set while retaining their method-specific batch and
+optimization behavior. Worst-case mixed-target entropy smoke tests passed for
+both CoCoOp and MaPLe at batch 8 without OOM. No formal revised-budget queue
+has been launched yet.
