@@ -1172,3 +1172,35 @@ case, and macro behavior, confirm only that weight on A42/C42 (six runs total).
 If results cross, do not expand the sweep: retain the simplest robust existing
 choice and move immediately to the main PL redesign. Replay bank/selection
 hyperparameters are out of scope for further tuning.
+
+Completion status (2026-07-15): all four seed100 pilots and both conditional
+lambda-0.75 seed42 confirmations completed on their first attempts. An external
+container occupied GPU1 for about four hours before C100; the watcher safely
+queued without using GPU0 or changing configs. No OOM, traceback, or NaN.
+
+```text
+A100 lambda0.5:  C 73.88 / P 91.28 / R 90.41 => 85.19
+A100 lambda0.75: C 74.04 / P 91.15 / R 90.27 => 85.15
+C100 lambda0.5:  A 83.93 / P 90.81 / R 90.75 => 88.50
+C100 lambda0.75: A 84.10 / P 91.19 / R 90.80 => 88.70
+A42 lambda0.75:  C 73.17 / P 91.08 / R 90.82 => 85.02
+C42 lambda0.75:  A 84.96 / P 91.17 / R 90.87 => 89.00
+```
+
+Lambda0.75 was confirmed because it improves the hardest domain over lambda0.5
+on both seed100 tasks (`+0.16/+0.17`), with only `-0.04` macro on A100 and
+`+0.20` macro plus better easy domains on C100. Across A/C and seeds42/100,
+lambda0.75 versus one-pass averages `+1.10` hardest and `+0.33` macro. Versus
+full-cycle lambda1 it averages `+0.12` hardest and approximately `+0.01` macro;
+hardest wins in three of four cases. Lock Replay weight at `0.75`, end Replay
+sweeps, and move to main-PL redesign.
+
+Every later stage has 1010 Replay/gradient steps and 4040 image exposures;
+normalization is none, scale is 1, and effective lambda exactly matches the
+requested weight. Local archives:
+
+```text
+.tmp/agent_handoff/logs/replay_weight_pilot_20260714/
+.tmp/agent_handoff/logs/replay_weight_confirm_20260715/
+.tmp/agent_handoff/results/replay_weight_20260715/
+```
