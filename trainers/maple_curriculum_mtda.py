@@ -29,6 +29,7 @@ from trainers.maple_continuous_mtda import (
     ContinuousSharedProjMaPLeMTDA,
     CustomContinuousSharedProjMaPLeMTDA,
 )
+from trainers.mtda_base import cap_num_batches
 
 
 def select_topk_replay_records(
@@ -351,12 +352,16 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         len_x = len(self.train_loader_x)
         len_u = [len(loader) for loader in self.train_loader_u.values()]
         if self.cfg.TRAIN.COUNT_ITER == "train_x":
-            return len_x
-        if self.cfg.TRAIN.COUNT_ITER == "train_u":
-            return min(len_u)
-        if self.cfg.TRAIN.COUNT_ITER == "smaller_one":
-            return min([len_x, *len_u])
-        raise ValueError(f"Unsupported TRAIN.COUNT_ITER={self.cfg.TRAIN.COUNT_ITER}")
+            natural = len_x
+        elif self.cfg.TRAIN.COUNT_ITER == "train_u":
+            natural = min(len_u)
+        elif self.cfg.TRAIN.COUNT_ITER == "smaller_one":
+            natural = min([len_x, *len_u])
+        else:
+            raise ValueError(
+                f"Unsupported TRAIN.COUNT_ITER={self.cfg.TRAIN.COUNT_ITER}"
+            )
+        return cap_num_batches(self.cfg, natural, "curriculum")
 
     def _stage_for_step(self, global_step):
         total_steps = self.max_epoch * self.num_batches

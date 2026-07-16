@@ -14,6 +14,22 @@ from dassl.engine.trainer import SimpleTrainer
 from dassl.utils import AverageMeter, MetricMeter
 
 
+def cap_num_batches(cfg, natural_batches, context):
+    """Apply an optional fixed per-epoch optimizer-step ceiling."""
+    cap = int(getattr(cfg.TRAIN, "MAX_BATCHES_PER_EPOCH", -1))
+    if cap == 0 or cap < -1:
+        raise ValueError("TRAIN.MAX_BATCHES_PER_EPOCH must be -1 or positive")
+    realized = min(natural_batches, cap) if cap > 0 else natural_batches
+    if realized <= 0:
+        raise RuntimeError(f"{context} resolved to zero optimizer steps")
+    if cap > 0:
+        print(
+            f"Fixed-step budget [{context}]: natural_batches={natural_batches}, "
+            f"cap={cap}, realized_batches={realized}"
+        )
+    return realized
+
+
 class MultiTargetDataManager:
     """Build one unlabeled loader and one test loader per target domain."""
 
@@ -288,6 +304,10 @@ class MultiTargetTrainerXU(SimpleTrainer):
                 raise ValueError(
                     f"Unsupported TRAIN.COUNT_ITER={self.cfg.TRAIN.COUNT_ITER}"
                 )
+
+        self.num_batches = cap_num_batches(
+            self.cfg, self.num_batches, "MultiTargetTrainerXU"
+        )
 
         train_loader_x_iter = iter(self.train_loader_x)
         train_loader_u_iters = OrderedDict()

@@ -536,6 +536,13 @@ class ContinuousSharedProjMaPLeMTDA(ContinuousMaPLeMTDA):
         print("Building ContinuousSharedProjMaPLeMTDA custom CLIP")
         self.model = self.custom_model_cls(cfg, classnames, clip_model)
 
+        # Mixed-target baseline mode with zero entropy is a genuine source-only
+        # probe. Curriculum runs keep MIX_TARGETS=False and retain target loaders.
+        mix_targets = bool(cfg.TRAINER.PROMPT_BASELINE_MTDA.MIX_TARGETS)
+        self.uses_target_training = not mix_targets or (
+            float(cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT) > 0.0
+        )
+
         print("Freezing CLIP image/text encoders; updating shared-proj continuous MaPLe prompt learner only")
         for name, param in self.model.named_parameters():
             param.requires_grad_("prompt_learner" in name)

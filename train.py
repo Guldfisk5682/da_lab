@@ -25,6 +25,7 @@ import datasets.ucf101
 import datasets.imagenet
 import datasets.office31
 import datasets.office_home_mtda
+import datasets.domainnet_mtda
 
 import datasets.imagenet_sketch
 import datasets.imagenetv2
@@ -147,6 +148,10 @@ def extend_cfg(cfg):
         cfg.TRAINER.MY_MODEL.PARAM_C = False
     """
     from yacs.config import CfgNode as CN
+
+    # A positive value caps realized optimizer steps per epoch while preserving
+    # the trainer's existing epoch-based scheduler interface.
+    cfg.TRAIN.MAX_BATCHES_PER_EPOCH = -1
 
     cfg.TRAINER.COOP = CN()
     cfg.TRAINER.COOP.N_CTX = 16  # number of context vectors
