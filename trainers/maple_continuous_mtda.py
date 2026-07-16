@@ -206,6 +206,9 @@ class CustomContinuousMaPLeMTDA(CustomMaPLeMTDA):
         self.token_embedding = clip_model.token_embedding
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
+        baseline_cfg = cfg.TRAINER.PROMPT_BASELINE_MTDA
+        self.lambda_ent = float(baseline_cfg.LAMBDA_ENT)
+        self.entropy_eps = float(baseline_cfg.ENTROPY_EPS)
         self.lambda_pl = float(maple_cfg.LAMBDA_PL)
         self.lambda_pl_final = float(maple_cfg.LAMBDA_PL_FINAL)
         self.pl_schedule = str(maple_cfg.PL_SCHEDULE).lower()
