@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--source", required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--entropy-weight", type=float, required=True)
+    parser.add_argument("--expected-targets", type=int, default=3)
     args = parser.parse_args()
 
     text = (args.run_dir / "log.txt").read_text(errors="replace")
@@ -27,8 +28,10 @@ def main():
     per_domain = {}
     for domain, accuracy in pairs:
         per_domain[domain] = float(accuracy)
-    if len(per_domain) != 3:
-        raise RuntimeError(f"Expected three target results, got {per_domain}")
+    if len(per_domain) != args.expected_targets:
+        raise RuntimeError(
+            f"Expected {args.expected_targets} target results, got {per_domain}"
+        )
 
     metrics = {
         "method": args.method,
