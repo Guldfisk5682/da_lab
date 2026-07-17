@@ -11,7 +11,10 @@ cd "${ROOT_DIR}"
 SEED="${SEED:-100}"
 
 for source in "$@"; do
-  bash scripts/domainnet_mtda/run_source_probe.sh "${source}" "${SEED}"
+  difficulty_file="${ROOT_DIR}/results/domainnet_mtda/difficulty_${source}_seed${SEED}.json"
+  if [[ ! -s "${difficulty_file}" ]]; then
+    bash scripts/domainnet_mtda/run_source_probe.sh "${source}" "${SEED}"
+  fi
   BUDGET_MODE=maple_full \
     bash scripts/domainnet_mtda/run_ours_one.sh "${source}" "${SEED}"
 done
