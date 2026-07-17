@@ -283,7 +283,9 @@ class MultiTargetTrainerXU(SimpleTrainer):
         data_time = AverageMeter()
 
         len_train_loader_x = len(self.train_loader_x)
-        use_target_training = bool(getattr(self, "uses_target_training", True))
+        use_target_training = not bool(
+            getattr(self.cfg.TRAIN, "SOURCE_ONLY", False)
+        ) and bool(getattr(self, "uses_target_training", True))
 
         if not use_target_training:
             self.num_batches = len_train_loader_x

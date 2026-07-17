@@ -29,6 +29,7 @@ if [[ ! -s "${checkpoint}" ]]; then
     --output-dir "${run_dir}" \
     OPTIM.MAX_EPOCH 10 \
     TRAIN.MAX_BATCHES_PER_EPOCH 500 \
+    TRAIN.SOURCE_ONLY True \
     TRAINER.PROMPT_BASELINE_MTDA.MIX_TARGETS True \
     TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT 0.0 \
     TEST.NO_TEST True

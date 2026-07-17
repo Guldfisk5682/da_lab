@@ -152,6 +152,7 @@ def extend_cfg(cfg):
     # A positive value caps realized optimizer steps per epoch while preserving
     # the trainer's existing epoch-based scheduler interface.
     cfg.TRAIN.MAX_BATCHES_PER_EPOCH = -1
+    cfg.TRAIN.SOURCE_ONLY = False
 
     cfg.TRAINER.COOP = CN()
     cfg.TRAINER.COOP.N_CTX = 16  # number of context vectors
