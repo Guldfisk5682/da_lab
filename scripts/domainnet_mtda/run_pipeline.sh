@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOURCE="${1:?usage: run_pipeline.sh <R|Q> [seed]}"
+SOURCE="${1:?usage: run_pipeline.sh <C|I|P|Q|R|S> [seed]}"
 SEED="${2:-100}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT_DIR}"

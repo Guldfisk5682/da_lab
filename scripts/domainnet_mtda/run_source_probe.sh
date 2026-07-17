@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOURCE="${1:?usage: run_source_probe.sh <R|Q> [seed]}"
+SOURCE="${1:?usage: run_source_probe.sh <C|I|P|Q|R|S> [seed]}"
 SEED="${2:-100}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT_DIR}"
 DATA_ROOT="${DATA_ROOT:-/workspace/dataset}"
 
 case "${SOURCE}" in
-  R) source_domain=real; targets=(clipart infograph painting quickdraw sketch) ;;
+  C) source_domain=clipart; targets=(infograph painting quickdraw real sketch) ;;
+  I) source_domain=infograph; targets=(clipart painting quickdraw real sketch) ;;
+  P) source_domain=painting; targets=(clipart infograph quickdraw real sketch) ;;
   Q) source_domain=quickdraw; targets=(clipart infograph painting real sketch) ;;
+  R) source_domain=real; targets=(clipart infograph painting quickdraw sketch) ;;
+  S) source_domain=sketch; targets=(clipart infograph painting quickdraw real) ;;
   *) echo "Unknown DomainNet source: ${SOURCE}" >&2; exit 2 ;;
 esac
 
