@@ -1457,9 +1457,14 @@ class MaPLeMTDA(MultiTargetTrainerXU):
             raise ValueError("MAPLE_MTDA.POST_INIT.MODEL_DIR is required when enabled")
 
         model_name = self._registered_model_name()
+        checkpoint_model_name = str(post_cfg.CHECKPOINT_MODEL_NAME).strip()
+        if not checkpoint_model_name:
+            checkpoint_model_name = model_name
         load_epoch = int(post_cfg.LOAD_EPOCH)
         model_file = "model-best.pth.tar" if load_epoch <= 0 else f"model.pth.tar-{load_epoch}"
-        model_path = osp.join(str(post_cfg.MODEL_DIR), model_name, model_file)
+        model_path = osp.join(
+            str(post_cfg.MODEL_DIR), checkpoint_model_name, model_file
+        )
         if not osp.exists(model_path):
             raise FileNotFoundError(f'Post-init model not found at "{model_path}"')
 
@@ -1468,7 +1473,10 @@ class MaPLeMTDA(MultiTargetTrainerXU):
         for key in ["prompt_learner.token_prefix", "prompt_learner.token_suffix"]:
             state_dict.pop(key, None)
 
-        print(f'Post-init loading {model_name} weights from "{model_path}"')
+        print(
+            f'Post-init loading {checkpoint_model_name} weights into '
+            f'{model_name} from "{model_path}"'
+        )
         load_state_dict_checked(
             self._models[model_name],
             state_dict,
