@@ -334,6 +334,15 @@ def extend_cfg(cfg):
     cfg.TRAINER.STYLE_PROMPT.LAMBDA_ENT = 0.01
     cfg.TRAINER.STYLE_PROMPT.EPS = 1e-6
 
+    # Some long-lived experiment worktrees predate prompt-baseline config
+    # registration. Keep new fixed-budget source-only probes cherry-pickable
+    # into those worktrees without requiring a broad branch merge.
+    if not hasattr(cfg.TRAINER, "PROMPT_BASELINE_MTDA"):
+        cfg.TRAINER.PROMPT_BASELINE_MTDA = CN()
+        cfg.TRAINER.PROMPT_BASELINE_MTDA.MIX_TARGETS = False
+        cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT = 0.0
+        cfg.TRAINER.PROMPT_BASELINE_MTDA.ENTROPY_EPS = 1e-8
+
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
 
 
