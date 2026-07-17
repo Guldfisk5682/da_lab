@@ -246,6 +246,9 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         curriculum_cfg = cfg.TRAINER.MAPLE_MTDA.CURRICULUM
         replay_cfg = curriculum_cfg.REPLAY
         assert int(curriculum_cfg.MICROBATCHES_PER_STEP) > 0
+        assert int(curriculum_cfg.STAGE_LIMIT) == -1 or int(
+            curriculum_cfg.STAGE_LIMIT
+        ) > 0
         assert int(curriculum_cfg.STAGE_VIRTUAL_EPOCHS) > 0
         assert int(replay_cfg.TOPK_PER_CLASS) > 0
         assert 0.0 <= float(replay_cfg.STUDENT_THRESHOLD) <= 1.0
@@ -279,6 +282,13 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             raise ValueError(
                 "CURRICULUM.DOMAIN_ORDER must contain every target domain exactly "
                 f"once; expected {available}, got {order}"
+            )
+        stage_limit = int(curriculum_cfg.STAGE_LIMIT)
+        if stage_limit > 0:
+            order = order[:stage_limit]
+            print(
+                "Diagnostic curriculum stage limit: "
+                f"using first {stage_limit} of {len(available)} target domains"
             )
         self.curriculum_order = order
         self.microbatches_per_step = int(curriculum_cfg.MICROBATCHES_PER_STEP)
