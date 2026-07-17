@@ -338,6 +338,16 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self._initial_pl_audit_written = False
         self._tfm_train = build_transform(self.cfg, is_train=True)
         self._tfm_test = build_transform(self.cfg, is_train=False)
+        self.replay_score_loaders_by_domain = OrderedDict()
+        for domain_name, items in self.dm.dataset.train_u_by_domain.items():
+            self.replay_score_loaders_by_domain[domain_name] = build_data_loader(
+                self.cfg,
+                sampler_type="SequentialSampler",
+                data_source=items,
+                batch_size=self.cfg.DATALOADER.TEST.BATCH_SIZE,
+                tfm=self._tfm_test,
+                is_train=False,
+            )
         print(f"Curriculum target order: {self.curriculum_order}")
         print(f"Target micro-batches per optimizer step: {self.microbatches_per_step}")
         print(f"Replay enabled: {bool(self.replay_cfg.ENABLED)}")
@@ -438,7 +448,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
         self.set_model_mode("eval")
         records = []
         data_source = self.dm.dataset.train_u_by_domain[domain_name]
-        loader = self.test_loaders_by_domain[domain_name]
+        loader = self.replay_score_loaders_by_domain[domain_name]
         for batch in loader:
             image = batch["img"].to(self.device)
             student_probs = F.softmax(self.model(image).float(), dim=-1)
@@ -454,6 +464,15 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             ).sum(dim=-1)
             for offset, index in enumerate(batch["index"].tolist()):
                 item = data_source[index]
+                if "impath" in batch and str(batch["impath"][offset]) != str(
+                    item.impath
+                ):
+                    raise RuntimeError(
+                        "Replay scoring loader index/path mismatch for "
+                        f"domain={domain_name}, index={index}: "
+                        f"batch={batch['impath'][offset]!r}, "
+                        f"data_source={item.impath!r}"
+                    )
                 true_label = int(item.label)
                 records.append(
                     {

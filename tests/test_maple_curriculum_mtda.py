@@ -1,4 +1,5 @@
 from collections import Counter
+from types import SimpleNamespace
 
 import pytest
 
@@ -136,6 +137,78 @@ def test_cycle_replay_restarts_loader_instead_of_disabling_it():
     assert trainer._stage_replay_batches_seen == 2
     assert trainer._stage_replay_images_seen == 4
     assert trainer._stage_replay_path_exposures == {"a.jpg": 2, "b.jpg": 2}
+
+
+def test_replay_scoring_uses_target_train_loader_metadata_not_test_split():
+    class FixedModel(torch.nn.Module):
+        def forward(self, image):
+            return image
+
+        def _compute_reference_logits(self, image):
+            return image
+
+    train_items = [
+        SimpleNamespace(impath="train-a.jpg", label=0, domain=1),
+        SimpleNamespace(impath="train-b.jpg", label=1, domain=1),
+    ]
+    train_batch = {
+        "img": torch.tensor([[8.0, 0.0], [0.0, 8.0]]),
+        "index": torch.tensor([0, 1]),
+        "impath": ["train-a.jpg", "train-b.jpg"],
+    }
+
+    trainer = object.__new__(CurriculumContinuousSharedProjMaPLeMTDA)
+    trainer.model = FixedModel()
+    trainer.device = torch.device("cpu")
+    trainer.dm = SimpleNamespace(
+        dataset=SimpleNamespace(train_u_by_domain={"target": train_items})
+    )
+    trainer.replay_score_loaders_by_domain = {"target": [train_batch]}
+    # A divergent test split must never be consulted when building replay.
+    trainer.test_loaders_by_domain = {"target": pytest.fail}
+    trainer.set_model_mode = lambda mode: trainer.model.train(mode == "train")
+
+    records = trainer._score_domain_for_replay("target")
+
+    assert [record["impath"] for record in records] == [
+        "train-a.jpg",
+        "train-b.jpg",
+    ]
+    assert [record["true_label"] for record in records] == [0, 1]
+    assert [record["student_label"] for record in records] == [0, 1]
+
+
+def test_replay_scoring_rejects_index_path_mismatch():
+    class FixedModel(torch.nn.Module):
+        def forward(self, image):
+            return image
+
+        def _compute_reference_logits(self, image):
+            return image
+
+    trainer = object.__new__(CurriculumContinuousSharedProjMaPLeMTDA)
+    trainer.model = FixedModel()
+    trainer.device = torch.device("cpu")
+    trainer.dm = SimpleNamespace(
+        dataset=SimpleNamespace(
+            train_u_by_domain={
+                "target": [SimpleNamespace(impath="expected.jpg", label=0, domain=1)]
+            }
+        )
+    )
+    trainer.replay_score_loaders_by_domain = {
+        "target": [
+            {
+                "img": torch.tensor([[8.0, 0.0]]),
+                "index": torch.tensor([0]),
+                "impath": ["wrong.jpg"],
+            }
+        ]
+    }
+    trainer.set_model_mode = lambda mode: trainer.model.train(mode == "train")
+
+    with pytest.raises(RuntimeError, match="index/path mismatch"):
+        trainer._score_domain_for_replay("target")
 
 
 def test_replay_gradient_audit_measures_only_weighted_replay_objective():
