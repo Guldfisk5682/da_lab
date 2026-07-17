@@ -186,6 +186,34 @@ class CustomCurriculumContinuousSharedProjMaPLeMTDA(
         self.lambda_replay = float(replay_cfg.LAMBDA)
         print(f"{self.log_prefix} replay weight: {self.lambda_replay}")
 
+    def forward_replay(self, replay_image, replay_label, replay_loss_scale=1.0):
+        """Compute the replay branch independently from the main train graph."""
+        if replay_image is None or replay_label is None:
+            raise ValueError("replay image and label are required")
+        replay_logits = self(replay_image)
+        loss_replay = F.cross_entropy(replay_logits, replay_label)
+        replay_accuracy = (
+            replay_logits.detach().argmax(dim=-1).eq(replay_label).float().mean()
+        )
+        self._ensure_finite("curriculum_replay_ce", loss_replay)
+        unnormalized_weighted_replay = self.lambda_replay * loss_replay
+        weighted_replay = float(replay_loss_scale) * unnormalized_weighted_replay
+        self._ensure_finite("curriculum_weighted_replay", weighted_replay)
+        return {
+            "loss_replay": loss_replay.detach(),
+            "unnormalized_weighted_loss_replay": (
+                unnormalized_weighted_replay.detach()
+            ),
+            "weighted_loss_replay": weighted_replay.detach(),
+            "replay_loss_scale": loss_replay.new_tensor(float(replay_loss_scale)),
+            "effective_replay_lambda": loss_replay.new_tensor(
+                self.lambda_replay * float(replay_loss_scale)
+            ),
+            "_weighted_replay_objective": weighted_replay,
+            "replay_accuracy": replay_accuracy.detach(),
+            "replay_active": loss_replay.new_tensor(1.0),
+        }
+
     def forward_train(
         self,
         image_s,
@@ -196,41 +224,31 @@ class CustomCurriculumContinuousSharedProjMaPLeMTDA(
         replay_loss_scale=1.0,
     ):
         outputs = super().forward_train(image_s, label_s, image_u_dict)
-        loss_replay = outputs["loss"].new_zeros(())
-        replay_accuracy = outputs["loss"].new_zeros(())
+        zero = outputs["loss"].new_zeros(())
         if replay_image is not None:
             if replay_label is None:
                 raise ValueError("replay_label is required when replay_image is provided")
-            replay_logits = self(replay_image)
-            loss_replay = F.cross_entropy(replay_logits, replay_label)
-            replay_accuracy = (
-                replay_logits.detach().argmax(dim=-1).eq(replay_label).float().mean()
+            replay_outputs = self.forward_replay(
+                replay_image,
+                replay_label,
+                replay_loss_scale=replay_loss_scale,
             )
-            self._ensure_finite("curriculum_replay_ce", loss_replay)
-
-        unnormalized_weighted_replay = self.lambda_replay * loss_replay
-        weighted_replay = float(replay_loss_scale) * unnormalized_weighted_replay
-        outputs["loss"] = outputs["loss"] + weighted_replay
+        else:
+            replay_outputs = {
+                "loss_replay": zero.detach(),
+                "unnormalized_weighted_loss_replay": zero.detach(),
+                "weighted_loss_replay": zero.detach(),
+                "replay_loss_scale": zero.detach(),
+                "effective_replay_lambda": zero.detach(),
+                "_weighted_replay_objective": zero,
+                "replay_accuracy": zero.detach(),
+                "replay_active": zero.detach(),
+            }
+        outputs["loss"] = (
+            outputs["loss"] + replay_outputs["_weighted_replay_objective"]
+        )
         self._ensure_finite("curriculum_loss_total", outputs["loss"])
-        outputs["loss_replay"] = loss_replay.detach()
-        outputs["unnormalized_weighted_loss_replay"] = (
-            unnormalized_weighted_replay.detach()
-        )
-        outputs["weighted_loss_replay"] = weighted_replay.detach()
-        outputs["replay_loss_scale"] = outputs["loss"].new_tensor(
-            float(replay_loss_scale)
-        )
-        outputs["effective_replay_lambda"] = outputs["loss"].new_tensor(
-            self.lambda_replay * float(replay_loss_scale)
-        )
-        # Keep the differentiable replay objective private to the trainer. It is
-        # removed before scalar logging and is used only by diagnostics to
-        # measure the replay branch's own gradient contribution.
-        outputs["_weighted_replay_objective"] = weighted_replay
-        outputs["replay_accuracy"] = replay_accuracy.detach()
-        outputs["replay_active"] = outputs["loss"].new_tensor(
-            float(replay_image is not None)
-        )
+        outputs.update(replay_outputs)
         return outputs
 
 
@@ -1417,46 +1435,65 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                     image_x,
                     label_x,
                     image_u,
-                    replay_image=replay_image,
-                    replay_label=replay_label,
-                    replay_loss_scale=self._stage_replay_loss_scale,
                 )
-                loss = outputs["loss"]
-            source_objective = outputs.pop("_source_ce_objective", None)
-            hard_objective = outputs.pop("_pl_hard_objective", None)
-            soft_objective = outputs.pop("_pl_soft_objective", None)
-            replay_objective = outputs.pop("_weighted_replay_objective")
-            replay_gradient_norm = self._measure_replay_gradient(replay_objective)
-            pl_gradient_metrics = self._measure_pl_branch_gradients(
-                source_objective, hard_objective, soft_objective, global_step
-            )
-            self.optim.zero_grad()
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optim)
-            self.scaler.update()
+                main_loss = outputs.pop("loss")
         else:
             outputs = self.model.forward_train(
                 image_x,
                 label_x,
                 image_u,
-                replay_image=replay_image,
-                replay_label=replay_label,
-                replay_loss_scale=self._stage_replay_loss_scale,
             )
-            loss = outputs["loss"]
-            source_objective = outputs.pop("_source_ce_objective", None)
-            hard_objective = outputs.pop("_pl_hard_objective", None)
-            soft_objective = outputs.pop("_pl_soft_objective", None)
-            replay_objective = outputs.pop("_weighted_replay_objective")
+            main_loss = outputs.pop("loss")
+
+        source_objective = outputs.pop("_source_ce_objective", None)
+        hard_objective = outputs.pop("_pl_hard_objective", None)
+        soft_objective = outputs.pop("_pl_soft_objective", None)
+        outputs.pop("_weighted_replay_objective")
+        pl_gradient_metrics = self._measure_pl_branch_gradients(
+            source_objective, hard_objective, soft_objective, global_step
+        )
+        main_loss_value = float(main_loss.detach().item())
+        self.optim.zero_grad()
+        if prec == "amp":
+            self.scaler.scale(main_loss).backward()
+        else:
+            main_loss.backward()
+        del main_loss, source_objective, hard_objective, soft_objective
+
+        replay_gradient_norm = 0.0
+        if replay_image is not None:
+            if prec == "amp":
+                with autocast():
+                    replay_outputs = self.model.forward_replay(
+                        replay_image,
+                        replay_label,
+                        replay_loss_scale=self._stage_replay_loss_scale,
+                    )
+            else:
+                replay_outputs = self.model.forward_replay(
+                    replay_image,
+                    replay_label,
+                    replay_loss_scale=self._stage_replay_loss_scale,
+                )
+            replay_objective = replay_outputs.pop("_weighted_replay_objective")
             replay_gradient_norm = self._measure_replay_gradient(replay_objective)
-            pl_gradient_metrics = self._measure_pl_branch_gradients(
-                source_objective, hard_objective, soft_objective, global_step
-            )
-            self.optim.zero_grad()
-            loss.backward()
+            if prec == "amp":
+                self.scaler.scale(replay_objective).backward()
+            else:
+                replay_objective.backward()
+            outputs.update(replay_outputs)
+            del replay_objective
+
+        if prec == "amp":
+            self.scaler.step(self.optim)
+            self.scaler.update()
+        else:
             self.optim.step()
 
-        summary = {"loss": float(loss.item())}
+        total_loss_value = main_loss_value + float(
+            outputs["weighted_loss_replay"].item()
+        )
+        summary = {"loss": total_loss_value}
         summary["weighted_replay_gradient_norm"] = replay_gradient_norm
         summary["unnormalized_weighted_replay_gradient_norm"] = (
             replay_gradient_norm / self._stage_replay_loss_scale

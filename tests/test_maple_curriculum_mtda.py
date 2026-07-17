@@ -211,6 +211,80 @@ def test_replay_scoring_rejects_index_path_mismatch():
         trainer._score_domain_for_replay("target")
 
 
+def test_replay_backward_runs_after_main_backward_in_same_optimizer_step():
+    class OrderedBackwardModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.prompt = torch.nn.Parameter(torch.tensor(0.0))
+            self.replay_saw_main_gradient = False
+
+        def forward_train(self, image_x, label_x, image_u):
+            main = (self.prompt - 1.0).pow(2)
+            zero = main.new_zeros(())
+            return {
+                "loss": main,
+                "source_ce": main.detach(),
+                "loss_replay": zero,
+                "unnormalized_weighted_loss_replay": zero,
+                "weighted_loss_replay": zero,
+                "replay_loss_scale": zero,
+                "effective_replay_lambda": zero,
+                "replay_accuracy": zero,
+                "replay_active": zero,
+                "_source_ce_objective": main,
+                "_pl_hard_objective": None,
+                "_pl_soft_objective": None,
+                "_weighted_replay_objective": zero,
+            }
+
+        def forward_replay(self, image, label, replay_loss_scale):
+            self.replay_saw_main_gradient = self.prompt.grad is not None
+            raw = (self.prompt + 2.0).pow(2)
+            weighted = 0.75 * replay_loss_scale * raw
+            one = raw.new_tensor(1.0)
+            return {
+                "loss_replay": raw.detach(),
+                "unnormalized_weighted_loss_replay": (0.75 * raw).detach(),
+                "weighted_loss_replay": weighted.detach(),
+                "replay_loss_scale": raw.new_tensor(replay_loss_scale),
+                "effective_replay_lambda": raw.new_tensor(
+                    0.75 * replay_loss_scale
+                ),
+                "replay_accuracy": one,
+                "replay_active": one,
+                "_weighted_replay_objective": weighted,
+            }
+
+    trainer = object.__new__(CurriculumContinuousSharedProjMaPLeMTDA)
+    trainer.model = OrderedBackwardModel()
+    trainer.device = torch.device("cpu")
+    trainer.optim = torch.optim.SGD(trainer.model.parameters(), lr=0.1)
+    trainer.cfg = SimpleNamespace(
+        TRAINER=SimpleNamespace(MAPLE_MTDA=SimpleNamespace(PREC="fp16"))
+    )
+    trainer.parse_batch_train = lambda batch_x, batch_u: (None, None, None)
+    trainer.max_epoch = 1
+    trainer.num_batches = 2
+    trainer.epoch = 0
+    trainer.batch_idx = 0
+    trainer._stage_replay_loss_scale = 1.0
+    trainer.reset_optim_per_stage = False
+    trainer._measure_replay_gradient = lambda objective: 0.0
+    trainer._measure_pl_branch_gradients = lambda *args: {}
+    trainer.update_lr = lambda: None
+
+    summary = trainer.forward_backward(
+        {}, {}, replay_batch={"img": torch.zeros(1), "label": torch.zeros(1)}
+    )
+
+    assert trainer.model.replay_saw_main_gradient
+    # At p=0: main gradient=-2 and weighted replay gradient=+3. One SGD
+    # update with their sum gives p=-0.1.
+    assert trainer.model.prompt.item() == pytest.approx(-0.1)
+    assert summary["loss"] == pytest.approx(4.0)
+    assert summary["replay_active"] == 1.0
+
+
 def test_replay_gradient_audit_measures_only_weighted_replay_objective():
     trainer = object.__new__(CurriculumContinuousSharedProjMaPLeMTDA)
     parameter = torch.nn.Parameter(torch.tensor([3.0, 4.0]))
