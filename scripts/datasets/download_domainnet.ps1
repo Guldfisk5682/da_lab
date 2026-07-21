@@ -73,11 +73,13 @@ foreach ($Domain in $Domains) {
     Get-ResumableFile -Url $ArchiveUrl -Destination $Archive
 
     $DomainDir = Join-Path $TargetDir $Domain
-    if (-not (Test-Path -LiteralPath $DomainDir -PathType Container)) {
+    $ExtractMarker = Join-Path $TargetDir ".$Domain.extracted.ok"
+    if (-not (Test-Path -LiteralPath $ExtractMarker -PathType Leaf)) {
         Write-Host "Extracting $Archive"
         Expand-Archive -LiteralPath $Archive -DestinationPath $TargetDir -Force
+        New-Item -ItemType File -Force -Path $ExtractMarker | Out-Null
     } else {
-        Write-Host "Domain directory exists; extraction skipped: $DomainDir"
+        Write-Host "Completed extraction marker exists; skipped: $DomainDir"
     }
 
     foreach ($Split in @("train", "test")) {
