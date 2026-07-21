@@ -48,3 +48,23 @@ bash scripts/prompt_baselines_mtda/run_domainnet_10gb_queue.sh
 Each completed task writes `mtda_metrics.json`; rerunning the queue skips such
 tasks and continues from the first unfinished source. A failed task stops the
 serial queue, so a downstream run cannot start after an OOM or traceback.
+
+## Native Windows / PowerShell 7
+
+The repository also provides native PowerShell entry points, with no WSL or
+Git Bash requirement:
+
+```powershell
+pwsh -File scripts/datasets/download_domainnet.ps1 -DataRoot "D:\datasets"
+
+$env:CUDA_VISIBLE_DEVICES = "0"
+pwsh -File scripts/prompt_baselines_mtda/run_domainnet_10gb_queue.ps1 `
+  -DataRoot "D:\datasets"
+```
+
+PowerShell defaults match the low-memory Linux queue: CoOp batch 16, CoCoOp
+batch 2 and test batch 16. Passing `-KeepArchives:$false` to the downloader
+deletes each archive after extraction. The training queue can be restarted
+after interruption and skips every task with a non-empty `mtda_metrics.json`.
+Use `-Methods coop` or `-Methods cocoop` to launch only one baseline, and
+`-Sources C,I` to restrict a launch to selected source domains.
