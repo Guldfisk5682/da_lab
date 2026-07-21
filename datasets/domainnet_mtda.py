@@ -87,6 +87,15 @@ class DomainNetMTDA(DatasetBase):
             test.extend(test_items)
 
         super().__init__(train_x=train_x, train_u=train_u, test=test)
+        # DatasetBase derives classnames only from train_x. The official
+        # painting_train split contains no example of class 327, so that would
+        # create 344 prompts while retaining raw labels up to 344. Keep the
+        # canonical 345-way label space shared by every DomainNet domain.
+        self._num_classes = len(label_to_classname)
+        self._lab2cname = dict(label_to_classname)
+        self._classnames = [
+            label_to_classname[label] for label in range(self._num_classes)
+        ]
         self.train_u_by_domain = train_u_by_domain
         self.test_by_domain = test_by_domain
 

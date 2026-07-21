@@ -14,10 +14,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--method", required=True)
-    parser.add_argument("--protocol", choices=["source_only", "mt_ent"], required=True)
+    parser.add_argument(
+        "--protocol",
+        choices=["zero_shot", "source_only", "mt_ent"],
+        required=True,
+    )
     parser.add_argument("--source", required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--entropy-weight", type=float, required=True)
+    parser.add_argument("--train-batch-size", type=int)
+    parser.add_argument("--test-batch-size", type=int)
     parser.add_argument("--expected-targets", type=int, default=3)
     args = parser.parse_args()
 
@@ -33,13 +39,16 @@ def main():
             f"Expected {args.expected_targets} target results, got {per_domain}"
         )
 
+    optimizer_steps = last_number(
+        r"Baseline budget audit:.*optimizer_steps=([0-9]+)", text, int
+    )
     metrics = {
         "method": args.method,
         "protocol": args.protocol,
         "source": args.source,
         "seed": args.seed,
         "backbone": "ViT-B/16",
-        "source_available": True,
+        "source_available": args.protocol != "zero_shot",
         "uses_unlabeled_target": args.protocol == "mt_ent",
         "pseudo_labels": False,
         "mixed_target_loader": args.protocol == "mt_ent",
@@ -57,8 +66,13 @@ def main():
             text,
             int,
         ),
-        "optimizer_steps": last_number(
-            r"Baseline budget audit:.*optimizer_steps=([0-9]+)", text, int
+        "optimizer_steps": optimizer_steps,
+        "train_batch_size": args.train_batch_size,
+        "test_batch_size": args.test_batch_size,
+        "source_sample_exposures": (
+            optimizer_steps * args.train_batch_size
+            if optimizer_steps is not None and args.train_batch_size is not None
+            else None
         ),
     }
     output = args.run_dir / "mtda_metrics.json"
