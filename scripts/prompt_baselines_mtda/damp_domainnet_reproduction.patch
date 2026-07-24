@@ -1,0 +1,605 @@
+diff --git a/configs/datasets/domainnet_full.yaml b/configs/datasets/domainnet_full.yaml
+new file mode 100644
+index 0000000..0be522f
+--- /dev/null
++++ b/configs/datasets/domainnet_full.yaml
+@@ -0,0 +1,16 @@
++INPUT:
++  SIZE: (224, 224)
++  TRANSFORMS: ["random_flip", "normalize"]
++
++DATASET:
++  NAME: "DomainNetFull"
++  SOURCE_DOMAINS: ["real"]
++  TARGET_DOMAINS: ["clipart", "infograph", "painting", "quickdraw", "sketch"]
++
++TRAINER:
++  DAMP:
++    STRONG_TRANSFORMS: ["random_flip", "randaugment", "normalize"]
++
++MODEL:
++  BACKBONE:
++    NAME: "ViT-B/16"
+diff --git a/datasets/__init__.py b/datasets/__init__.py
+new file mode 100644
+index 0000000..be56c54
+--- /dev/null
++++ b/datasets/__init__.py
+@@ -0,0 +1,3 @@
++from .domainnet_full import DomainNetFull
++
++__all__ = ["DomainNetFull"]
+diff --git a/datasets/domainnet_full.py b/datasets/domainnet_full.py
+new file mode 100644
+index 0000000..470a847
+--- /dev/null
++++ b/datasets/domainnet_full.py
+@@ -0,0 +1,147 @@
++import os.path as osp
++from collections import OrderedDict
++
++from dassl.data.datasets import DATASET_REGISTRY, Datum, DatasetBase
++
++
++ALIASES = {
++    "c": "clipart",
++    "clipart": "clipart",
++    "i": "infograph",
++    "infograph": "infograph",
++    "p": "painting",
++    "painting": "painting",
++    "q": "quickdraw",
++    "quickdraw": "quickdraw",
++    "quick_draw": "quickdraw",
++    "r": "real",
++    "real": "real",
++    "real_world": "real",
++    "s": "sketch",
++    "sketch": "sketch",
++}
++
++
++def normalize_domain(name):
++    key = str(name).strip().lower().replace("-", "_").replace(" ", "_")
++    if key not in ALIASES:
++        raise ValueError(f"Unsupported DomainNet domain: {name}")
++    return ALIASES[key]
++
++
++@DATASET_REGISTRY.register()
++class DomainNetFull(DatasetBase):
++    """Full DomainNet-345 using the official train/test lists.
++
++    DAMP receives one labeled source loader and one concatenated unlabeled
++    target loader. ``TARGET_DOMAINS`` may contain all five remaining domains
++    for MTDA training or one domain for checkpoint evaluation.
++    """
++
++    dataset_dir = "DomainNet"
++    domains = ["clipart", "infograph", "painting", "quickdraw", "real", "sketch"]
++    domain_codes = OrderedDict(
++        (domain, code)
++        for domain, code in zip(domains, ["C", "I", "P", "Q", "R", "S"])
++    )
++
++    def __init__(self, cfg):
++        root = osp.abspath(osp.expanduser(cfg.DATASET.ROOT))
++        candidate = osp.join(root, self.dataset_dir)
++        self.dataset_dir = candidate if osp.isdir(candidate) else root
++        self.list_dir = osp.join(self.dataset_dir, "image_list")
++        if not osp.isdir(self.list_dir):
++            raise FileNotFoundError(
++                f'DomainNetFull requires image_list/ below "{self.dataset_dir}"'
++            )
++
++        source_domains = [normalize_domain(d) for d in cfg.DATASET.SOURCE_DOMAINS]
++        if len(source_domains) != 1:
++            raise ValueError(f"Expected one source domain, got {source_domains}")
++        source = source_domains[0]
++        targets = [normalize_domain(d) for d in cfg.DATASET.TARGET_DOMAINS]
++        if not targets:
++            raise ValueError("At least one target domain is required")
++        if source in targets or len(targets) != len(set(targets)):
++            raise ValueError(f"Invalid source/target selection: {source}, {targets}")
++
++        label_to_classname = self._build_global_label_mapping()
++        train_x = self._read_split(source, "train", label_to_classname)
++        train_u = []
++        test = []
++        for target in targets:
++            train_u.extend(self._read_split(target, "train", label_to_classname))
++            test.extend(self._read_split(target, "test", label_to_classname))
++
++        super().__init__(train_x=train_x, train_u=train_u, test=test)
++        self._num_classes = len(label_to_classname)
++        self._lab2cname = dict(label_to_classname)
++        self._classnames = [
++            label_to_classname[label] for label in range(self._num_classes)
++        ]
++
++    def _list_path(self, domain, split):
++        path = osp.join(self.list_dir, f"{domain}_{split}.txt")
++        if not osp.isfile(path):
++            raise FileNotFoundError(f'Missing DomainNet list: "{path}"')
++        return path
++
++    @staticmethod
++    def _parse_line(line, path, line_number):
++        try:
++            relative_path, raw_label = line.rstrip().rsplit(maxsplit=1)
++            return relative_path, int(raw_label)
++        except ValueError as exc:
++            raise ValueError(
++                f"Malformed entry at {path}:{line_number}: {line!r}"
++            ) from exc
++
++    def _build_global_label_mapping(self):
++        mapping = {}
++        for domain in self.domains:
++            for split in ("train", "test"):
++                path = self._list_path(domain, split)
++                with open(path, "r", encoding="utf-8") as handle:
++                    for line_number, line in enumerate(handle, 1):
++                        relative_path, label = self._parse_line(
++                            line, path, line_number
++                        )
++                        classname = (
++                            relative_path.replace("\\", "/")
++                            .split("/")[-2]
++                            .replace("_", " ")
++                            .lower()
++                        )
++                        previous = mapping.setdefault(label, classname)
++                        if previous != classname:
++                            raise ValueError(
++                                f"Inconsistent label {label}: "
++                                f"{previous!r} versus {classname!r}"
++                            )
++        if sorted(mapping) != list(range(345)):
++            raise ValueError(
++                f"Expected canonical labels 0..344, got {len(mapping)} labels"
++            )
++        return mapping
++
++    def _read_split(self, domain, split, label_to_classname):
++        items = []
++        path = self._list_path(domain, split)
++        domain_index = self.domains.index(domain)
++        with open(path, "r", encoding="utf-8") as handle:
++            for line_number, line in enumerate(handle, 1):
++                relative_path, label = self._parse_line(line, path, line_number)
++                impath = osp.join(self.dataset_dir, relative_path)
++                if not osp.isfile(impath):
++                    raise FileNotFoundError(
++                        f'Missing image at {path}:{line_number}: "{impath}"'
++                    )
++                items.append(
++                    Datum(
++                        impath=impath,
++                        label=label,
++                        domain=domain_index,
++                        classname=label_to_classname[label],
++                    )
++                )
++        return items
+diff --git a/scripts/domainnet_mtda.py b/scripts/domainnet_mtda.py
+new file mode 100644
+index 0000000..5f62ac2
+--- /dev/null
++++ b/scripts/domainnet_mtda.py
+@@ -0,0 +1,163 @@
++#!/usr/bin/env python3
++import argparse
++import json
++import re
++import subprocess
++import sys
++from pathlib import Path
++
++
++DOMAINS = {
++    "C": "clipart",
++    "I": "infograph",
++    "P": "painting",
++    "Q": "quickdraw",
++    "R": "real",
++    "S": "sketch",
++}
++
++
++def run(command, log_path):
++    log_path.parent.mkdir(parents=True, exist_ok=True)
++    with log_path.open("w", encoding="utf-8") as handle:
++        process = subprocess.Popen(
++            command,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.STDOUT,
++            text=True,
++            bufsize=1,
++        )
++        for line in process.stdout:
++            sys.stdout.write(line)
++            handle.write(line)
++        return_code = process.wait()
++    if return_code:
++        raise subprocess.CalledProcessError(return_code, command)
++
++
++def parse_accuracy(log_path):
++    text = log_path.read_text(errors="replace")
++    matches = re.findall(r"\* accuracy: ([0-9.]+)%", text)
++    if not matches:
++        matches = re.findall(r"accuracy: ([0-9.]+)%", text)
++    if not matches:
++        raise RuntimeError(f"No accuracy found in {log_path}")
++    return float(matches[-1])
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--source", required=True, choices=DOMAINS)
++    parser.add_argument("--root", default="/workspace/dataset")
++    parser.add_argument("--output-root", default="output/domainnet_mtda/damp_mtda")
++    parser.add_argument("--seed", type=int, default=100)
++    parser.add_argument("--train-batch-size", type=int, default=8)
++    parser.add_argument("--test-batch-size", type=int, default=32)
++    parser.add_argument("--num-workers", type=int, default=4)
++    args = parser.parse_args()
++
++    targets = [code for code in DOMAINS if code != args.source]
++    task = f"{args.source}2O"
++    run_dir = Path(args.output_root) / task / f"seed{args.seed}"
++    metrics_path = run_dir / "mtda_metrics.json"
++    if metrics_path.is_file() and metrics_path.stat().st_size:
++        print(metrics_path.read_text(), end="")
++        return
++
++    common = [
++        sys.executable,
++        "train.py",
++        "--root",
++        args.root,
++        "--trainer",
++        "DAMP",
++        "--dataset-config-file",
++        "configs/datasets/domainnet_full.yaml",
++        "--config-file",
++        "configs/trainers/DAMP/damp.yaml",
++        "--seed",
++        str(args.seed),
++        "--source-domains",
++        DOMAINS[args.source],
++    ]
++    overrides = [
++        "MODEL.BACKBONE.NAME",
++        "ViT-B/16",
++        "DATALOADER.TRAIN_X.BATCH_SIZE",
++        str(args.train_batch_size),
++        "DATALOADER.TRAIN_U.SAME_AS_X",
++        "True",
++        "DATALOADER.TRAIN_U.BATCH_SIZE",
++        str(args.train_batch_size),
++        "DATALOADER.TEST.BATCH_SIZE",
++        str(args.test_batch_size),
++        "DATALOADER.NUM_WORKERS",
++        str(args.num_workers),
++        "OPTIM.MAX_EPOCH",
++        "30",
++        "OPTIM_C.MAX_EPOCH",
++        "30",
++        "TRAIN.COUNT_ITER",
++        "train_x",
++        "TEST.NO_TEST",
++        "True",
++        "TEST.FINAL_MODEL",
++        "last_step",
++    ]
++
++    checkpoint_a = run_dir / "prompt_learner" / "model.pth.tar-30"
++    checkpoint_b = run_dir / "context_decoder" / "model.pth.tar-30"
++    if not (checkpoint_a.is_file() and checkpoint_b.is_file()):
++        train_command = (
++            common
++            + ["--target-domains"]
++            + [DOMAINS[code] for code in targets]
++            + ["--output-dir", str(run_dir)]
++            + overrides
++        )
++        run(train_command, run_dir / "train.log")
++
++    per_domain = {}
++    for code in targets:
++        eval_log = run_dir / f"eval_{DOMAINS[code]}.log"
++        eval_command = (
++            common
++            + [
++                "--target-domains",
++                DOMAINS[code],
++                "--output-dir",
++                str(run_dir / f"eval_{DOMAINS[code]}"),
++                "--eval-only",
++                "--model-dir",
++                str(run_dir),
++                "--load-epoch",
++                "30",
++            ]
++            + overrides
++        )
++        run(eval_command, eval_log)
++        per_domain[DOMAINS[code]] = parse_accuracy(eval_log)
++
++    metrics = {
++        "method": "DAMP-MT",
++        "protocol": "source_available_mixed_target",
++        "backbone": "ViT-B/16",
++        "source": args.source,
++        "targets": targets,
++        "seed": args.seed,
++        "per_domain_accuracy": per_domain,
++        "macro_accuracy": sum(per_domain.values()) / len(per_domain),
++        "trainable_params": 6725122,
++        "epochs": 30,
++        "steps_per_epoch": 500,
++        "optimizer_steps": 15000,
++        "train_batch_size": args.train_batch_size,
++        "test_batch_size": args.test_batch_size,
++    }
++    metrics_path.parent.mkdir(parents=True, exist_ok=True)
++    metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
++    print(metrics_path.read_text(), end="")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/run_domainnet_queue.sh b/scripts/run_domainnet_queue.sh
+new file mode 100644
+index 0000000..f595f6d
+--- /dev/null
++++ b/scripts/run_domainnet_queue.sh
+@@ -0,0 +1,23 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++cd "${ROOT_DIR}"
++
++DATA_ROOT="${DATA_ROOT:-/workspace/dataset}"
++SEED="${SEED:-100}"
++TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-32}"
++TEST_BATCH_SIZE="${TEST_BATCH_SIZE:-32}"
++NUM_WORKERS="${NUM_WORKERS:-8}"
++
++for source in C I P Q R S; do
++  echo "[$(date -Is)] START DAMP ${source}2O"
++  python scripts/domainnet_mtda.py \
++    --source "${source}" \
++    --root "${DATA_ROOT}" \
++    --seed "${SEED}" \
++    --train-batch-size "${TRAIN_BATCH_SIZE}" \
++    --test-batch-size "${TEST_BATCH_SIZE}" \
++    --num-workers "${NUM_WORKERS}"
++  echo "[$(date -Is)] DONE DAMP ${source}2O"
++done
+diff --git a/train.py b/train.py
+index 43d1106..f5dc107 100644
+--- a/train.py
++++ b/train.py
+@@ -1,6 +1,7 @@
+ import argparse
+ import torch
+ import os
++import numpy as np
+ 
+ from dassl.utils import setup_logger, set_random_seed, collect_env_info
+ from dassl.config import get_cfg_default
+@@ -11,12 +12,17 @@ from torch.cuda import init
+ from dassl.data.datasets import VisDA17
+ from dassl.data.datasets import OfficeHome
+ from dassl.data.datasets import miniDomainNet
++from datasets.domainnet_full import DomainNetFull
+ 
+ import trainers.damp
+ 
+ import warnings
+ warnings.filterwarnings("ignore")
+ 
++# Legacy Dassl RandAugment still references the removed NumPy alias.
++if not hasattr(np, "int"):
++    np.int = int
++
+ 
+ def print_args(args, cfg):
+     print("***************")
+@@ -101,6 +107,8 @@ def extend_cfg(cfg):
+     cfg.TRAINER.DAMP.IM = 1.0
+     cfg.OPTIM_C = cfg.OPTIM.clone()
+     cfg.TRAINER.DAMP.STRONG_TRANSFORMS = []
++    # Optional smoke-test cap. Negative values preserve the original budget.
++    cfg.TRAIN.MAX_BATCHES_PER_EPOCH = -1
+ 
+     # cfg.TRAINER.DAMP.V_GAMMA = 0.01
+     # cfg.TRAINER.DAMP.T_GAMMA = 0.01
+diff --git a/trainers/damp.py b/trainers/damp.py
+index 5e719f7..5ce9904 100644
+--- a/trainers/damp.py
++++ b/trainers/damp.py
+@@ -10,7 +10,7 @@ from torch.cuda.amp import GradScaler, autocast
+ 
+ from dassl.engine import TRAINER_REGISTRY, TrainerXU
+ from dassl.metrics import compute_accuracy
+-from dassl.utils import MetricMeter, AverageMeter, load_pretrained_weights, load_checkpoint, save_checkpoint
++from dassl.utils import MetricMeter, AverageMeter, load_pretrained_weights, save_checkpoint
+ from dassl.optim import build_optimizer, build_lr_scheduler
+ 
+ from clip import clip
+@@ -77,11 +77,21 @@ class Attention(nn.Module):
+         k = self.k_proj(k).reshape(B, M, self.num_heads, C // self.num_heads)
+         v = self.v_proj(v).reshape(B, M, self.num_heads, C // self.num_heads)
+ 
+-        attn = torch.einsum('bnkc,bmkc->bknm', q, k) * self.scale
+-
+-        attn = attn.softmax(dim=-1)
+-
+-        x = torch.einsum('bknm,bmkc->bnkc', attn, v).reshape(B, N, C)
++        # PyTorch's fused scaled-dot-product attention computes the same
++        # per-head operation without materializing the full attention tensor.
++        # The original implementation did not apply attention dropout, so
++        # dropout_p remains zero here as well.
++        q = q.permute(0, 2, 1, 3)
++        k = k.permute(0, 2, 1, 3)
++        v = v.permute(0, 2, 1, 3)
++        x = F.scaled_dot_product_attention(
++            q,
++            k,
++            v,
++            dropout_p=0.0,
++            scale=self.scale,
++        )
++        x = x.permute(0, 2, 1, 3).reshape(B, N, C)
+ 
+         x = self.proj(x)
+         x = self.proj_drop(x)
+@@ -416,14 +426,33 @@ class CustomCLIP(nn.Module):
+         self.context_feature = context_feature
+         self.use_visual_prompt_generator = use_visual_prompt_generator
+         self.use_text_prompt_generator = use_text_prompt_generator
+-        self.naive_text_embedding = self.text_encoder(self.prompt_learner.naive_embedding, self.prompt_learner.naive_tokenized_prompts)[0].to(
+-            torch.device("cuda")) # text features for zero-shot pseudo labels
++        # These teacher features are fixed throughout training. Registering
++        # them as a buffer avoids retaining an unnecessary text-encoder graph
++        # and lets model.to(device) move them with the rest of the module.
++        with torch.no_grad():
++            naive_text_embedding = self.text_encoder(
++                self.prompt_learner.naive_embedding,
++                self.prompt_learner.naive_tokenized_prompts,
++            )[0]
++        self.register_buffer("naive_text_embedding", naive_text_embedding)
+         # tunable = sum(p.numel() for p in self.image_encoder.parameters())
+         # print("tunable parameters: ", tunable)
+ 
+ 
+     @autocast()
+-    def forward(self, img, ind=False, pse=False, fea = False):
++    def encode_prompt_features(self):
++        raw_prompt = self.prompt_learner()
++        return self.text_encoder(raw_prompt, self.tokenized_prompts)
++
++    @autocast()
++    def forward(
++        self,
++        img,
++        ind=False,
++        pse=False,
++        fea=False,
++        prompt_features=None,
++    ):
+         # 4 stage output + (global feat, self-attention based feat)
+         x = self.image_encoder(img) 
+         # BC         BCHW
+@@ -433,10 +462,9 @@ class CustomCLIP(nn.Module):
+             # (B, C, 1+H*W)
+             visual_contexts = torch.cat([global_feat.reshape(B, C, 1), visual_embeddings.reshape(B, C, H * W)],
+                                        dim=2).permute(0, 2, 1)  # B, (1+H*W), C
+-        raw_prompt = self.prompt_learner() # K, 77, 512
+-        tokenized_prompts = self.tokenized_prompts # K, 77, 512 
+-        K = self.prompt_learner.n_cls
+-        text_embeddings, text_contexts = self.text_encoder(raw_prompt, tokenized_prompts)
++        if prompt_features is None:
++            prompt_features = self.encode_prompt_features()
++        text_embeddings, text_contexts = prompt_features
+         text_embeddings = text_embeddings.expand(B, -1, -1) # B, K, C
+         text_contexts = text_contexts.expand(B, -1, -1, -1)[:,0,:self.prompt_learner.n_ctx,:] # B, L, C
+         # update visual prompting
+@@ -632,6 +660,9 @@ class DAMP(TrainerXU):
+             self.num_batches = min(len_train_loader_x, len_train_loader_u)
+         else:
+             raise ValueError
++        max_batches = int(self.cfg.TRAIN.MAX_BATCHES_PER_EPOCH)
++        if max_batches > 0:
++            self.num_batches = min(self.num_batches, max_batches)
+ 
+         train_loader_x_iter = iter(self.train_loader_x)
+         train_loader_u_iter = iter(self.train_loader_u)
+@@ -684,9 +715,16 @@ class DAMP(TrainerXU):
+                       ))
+ 
+             n_iter = self.epoch * self.num_batches + self.batch_idx
+-            for name, meter in losses.meters.items():
+-                self.write_scalar("train/" + name, meter.avg, n_iter)
+-            self.write_scalar("train/lr", self.get_current_lr(), n_iter)
++            # Network-backed output directories make per-step TensorBoard
++            # writes disproportionately expensive. PRINT_FREQ already defines
++            # the reporting resolution and still yields 150 points per run.
++            if (
++                (self.batch_idx + 1) % self.cfg.TRAIN.PRINT_FREQ == 0
++                or (self.batch_idx + 1) == self.num_batches
++            ):
++                for name, meter in losses.meters.items():
++                    self.write_scalar("train/" + name, meter.avg, n_iter)
++                self.write_scalar("train/lr", self.get_current_lr(), n_iter)
+ 
+             end = time.time()
+ 
+@@ -696,10 +734,28 @@ class DAMP(TrainerXU):
+         prec = self.cfg.TRAINER.DAMP.PREC
+         if prec == "amp":
+             with autocast():
+-                output_x, output_x_ind = self.model(image_x, ind =True, pse=False)
+-                output_u, output_u_ind, pseudo_label_logits = self.model(image_u, ind=True, pse=True)
+-                output_x2 = self.model(image_x2)[0]
+-                output_u2 = self.model(image_u2)[0]
++                # The learned text prompts are identical for all four views in
++                # one optimizer step. Encode them once and reuse the same graph
++                # so gradients from every branch still accumulate normally.
++                prompt_features = self.model.encode_prompt_features()
++                output_x, output_x_ind = self.model(
++                    image_x,
++                    ind=True,
++                    pse=False,
++                    prompt_features=prompt_features,
++                )
++                output_u, output_u_ind, pseudo_label_logits = self.model(
++                    image_u,
++                    ind=True,
++                    pse=True,
++                    prompt_features=prompt_features,
++                )
++                output_x2 = self.model(
++                    image_x2, prompt_features=prompt_features
++                )[0]
++                output_u2 = self.model(
++                    image_u2, prompt_features=prompt_features
++                )[0]
+                 
+                 # only clip annotation
+                 mix_lambda = self.epoch / self.max_epoch
+@@ -806,7 +862,12 @@ class DAMP(TrainerXU):
+                 raise FileNotFoundError(
+                     'Model not found at "{}"'.format(model_path))
+ 
+-            checkpoint = load_checkpoint(model_path)
++            # The files are locally produced checkpoints. PyTorch 2.6 changed
++            # torch.load's default to weights_only=True, which rejects the
++            # optimizer/scheduler objects stored by legacy Dassl.
++            checkpoint = torch.load(
++                model_path, map_location="cpu", weights_only=False
++            )
+             state_dict = checkpoint["state_dict"]
+             epoch = checkpoint["epoch"]
+ 
+@@ -835,7 +896,7 @@ class DAMP(TrainerXU):
+ 
+         for batch_idx, batch in enumerate(data_loader):
+             input, label = self.parse_batch_test(batch)
+-            output, output_pse = self.model_inference(input)
++            output = self.model_inference(input)[0]
+             self.evaluator.process(output, label)
+ 
+         results = self.evaluator.evaluate()
+@@ -845,4 +906,4 @@ class DAMP(TrainerXU):
+ 
+         results_all = results["accuracy"]
+ 
+-        return results_all
+\ No newline at end of file
++        return results_all
