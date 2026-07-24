@@ -162,6 +162,30 @@ def stage_local_schedule_index(local_step, stage_length, virtual_epochs):
     return min(virtual_epochs - 1, local_step * virtual_epochs // stage_length)
 
 
+def weighted_stage_bounds(total_steps, stage_weights):
+    """Partition total steps using positive relative stage weights."""
+    if total_steps <= 0:
+        raise ValueError("total_steps must be positive")
+    if not stage_weights:
+        raise ValueError("stage_weights must be non-empty")
+    weights = [int(weight) for weight in stage_weights]
+    if any(weight <= 0 for weight in weights):
+        raise ValueError("stage_weights must contain only positive integers")
+    weight_sum = sum(weights)
+    cumulative = 0
+    bounds = []
+    for weight in weights:
+        start = (cumulative * total_steps + weight_sum - 1) // weight_sum
+        cumulative += weight
+        end = (cumulative * total_steps + weight_sum - 1) // weight_sum
+        if end <= start:
+            raise ValueError(
+                "total_steps is too small to allocate at least one step per stage"
+            )
+        bounds.append((start, end))
+    return bounds
+
+
 def replay_step_budget_scale(normalization, one_pass_steps, stage_steps):
     """Return a stage-fixed scale matching one-pass replay update steps."""
     if stage_steps <= 0:
@@ -268,6 +292,9 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             curriculum_cfg.STAGE_LIMIT
         ) > 0
         assert int(curriculum_cfg.STAGE_VIRTUAL_EPOCHS) > 0
+        assert all(
+            int(weight) > 0 for weight in curriculum_cfg.STAGE_STEP_WEIGHTS
+        )
         assert int(replay_cfg.TOPK_PER_CLASS) > 0
         assert 0.0 <= float(replay_cfg.STUDENT_THRESHOLD) <= 1.0
         assert 0.0 <= float(replay_cfg.CLIP_THRESHOLD) <= 1.0
@@ -309,6 +336,18 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                 f"using first {stage_limit} of {len(available)} target domains"
             )
         self.curriculum_order = order
+        stage_step_weights = [
+            int(weight) for weight in curriculum_cfg.STAGE_STEP_WEIGHTS
+        ]
+        if stage_step_weights and stage_limit > 0:
+            stage_step_weights = stage_step_weights[:stage_limit]
+        if stage_step_weights and len(stage_step_weights) != len(order):
+            raise ValueError(
+                "CURRICULUM.STAGE_STEP_WEIGHTS must be empty or contain one "
+                f"positive weight per active target domain; got "
+                f"{stage_step_weights} for {order}"
+            )
+        self.stage_step_weights = stage_step_weights or [1] * len(order)
         self.microbatches_per_step = int(curriculum_cfg.MICROBATCHES_PER_STEP)
         self.reset_optim_per_stage = bool(curriculum_cfg.RESET_OPTIM_PER_STAGE)
         self.stage_virtual_epochs = int(curriculum_cfg.STAGE_VIRTUAL_EPOCHS)
@@ -367,6 +406,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
                 is_train=False,
             )
         print(f"Curriculum target order: {self.curriculum_order}")
+        print(f"Curriculum stage step weights: {self.stage_step_weights}")
         print(f"Target micro-batches per optimizer step: {self.microbatches_per_step}")
         print(f"Replay enabled: {bool(self.replay_cfg.ENABLED)}")
         print(f"Replay selection mode: {self.replay_selection_mode}")
@@ -403,17 +443,16 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
 
     def _stage_for_step(self, global_step):
         total_steps = self.max_epoch * self.num_batches
-        return min(
-            len(self.curriculum_order) - 1,
-            global_step * len(self.curriculum_order) // max(total_steps, 1),
-        )
+        for stage, (_, end) in enumerate(
+            weighted_stage_bounds(total_steps, self.stage_step_weights)
+        ):
+            if global_step < end:
+                return stage
+        return len(self.curriculum_order) - 1
 
     def _stage_bounds(self, stage):
         total_steps = self.max_epoch * self.num_batches
-        num_stages = len(self.curriculum_order)
-        start = (stage * total_steps + num_stages - 1) // num_stages
-        end = ((stage + 1) * total_steps + num_stages - 1) // num_stages
-        return start, end
+        return weighted_stage_bounds(total_steps, self.stage_step_weights)[stage]
 
     def _reset_stage_optimizer_scheduler(self, stage):
         self.optim = build_optimizer(self.model, self.cfg.OPTIM)
@@ -869,6 +908,7 @@ class CurriculumContinuousSharedProjMaPLeMTDA(ContinuousSharedProjMaPLeMTDA):
             "norm_of_summed_weighted_replay_gradients": accumulated_gradient_norm,
             "reset_optim_per_stage": self.reset_optim_per_stage,
             "stage_virtual_epochs": self.stage_virtual_epochs,
+            "stage_step_weights": self.stage_step_weights,
         }
         self._write_jsonl("curriculum_stage_audit.jsonl", audit)
         print("Curriculum stage audit: " + json.dumps(audit, sort_keys=True))

@@ -296,6 +296,9 @@ def extend_cfg(cfg):
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM = CN()
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.DOMAIN_ORDER = []
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.STAGE_LIMIT = -1
+    # Optional positive relative weights for unequal curriculum stage budgets.
+    # Empty preserves the historical equal split.
+    cfg.TRAINER.MAPLE_MTDA.CURRICULUM.STAGE_STEP_WEIGHTS = []
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.MICROBATCHES_PER_STEP = 3
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.RESET_OPTIM_PER_STAGE = False
     cfg.TRAINER.MAPLE_MTDA.CURRICULUM.STAGE_VIRTUAL_EPOCHS = 5

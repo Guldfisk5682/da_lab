@@ -12,6 +12,7 @@ from trainers.maple_curriculum_mtda import (
     replay_step_budget_scale,
     select_topk_replay_records,
     stage_local_schedule_index,
+    weighted_stage_bounds,
 )
 from trainers.maple_mtda import CustomMaPLeMTDA
 
@@ -20,6 +21,29 @@ def test_one_pass_step_normalization_matches_actual_replay_update_budget():
     scale = replay_step_budget_scale("one_pass_steps", 118, 1010)
     assert scale == pytest.approx(118 / 1010)
     assert scale * 1010 == pytest.approx(118)
+
+
+def test_weighted_stage_bounds_reproduce_low_budget_officehome_schedule():
+    assert weighted_stage_bounds(2424, [5, 4, 3]) == [
+        (0, 1010),
+        (1010, 1818),
+        (1818, 2424),
+    ]
+
+
+def test_weighted_stage_bounds_preserve_historical_equal_split():
+    assert weighted_stage_bounds(3030, [1, 1, 1]) == [
+        (0, 1010),
+        (1010, 2020),
+        (2020, 3030),
+    ]
+
+
+def test_weighted_stage_bounds_reject_invalid_or_empty_stages():
+    with pytest.raises(ValueError, match="positive integers"):
+        weighted_stage_bounds(10, [1, 0, 1])
+    with pytest.raises(ValueError, match="too small"):
+        weighted_stage_bounds(2, [1, 1, 1])
 
 
 def test_replay_step_normalization_caps_reference_at_stage_length():

@@ -29,6 +29,16 @@ if [ "${#ORDER_ARRAY[@]}" -ne 3 ]; then
   exit 2
 fi
 ORDER_CFG="['${ORDER_ARRAY[0]}','${ORDER_ARRAY[1]}','${ORDER_ARRAY[2]}']"
+STAGE_STEP_WEIGHTS="${STAGE_STEP_WEIGHTS:-}"
+STAGE_WEIGHTS_CFG="[]"
+if [ -n "${STAGE_STEP_WEIGHTS}" ]; then
+  read -r -a STAGE_WEIGHT_ARRAY <<< "${STAGE_STEP_WEIGHTS}"
+  if [ "${#STAGE_WEIGHT_ARRAY[@]}" -ne 3 ]; then
+    echo "STAGE_STEP_WEIGHTS must contain exactly three positive integers." >&2
+    exit 2
+  fi
+  STAGE_WEIGHTS_CFG="[${STAGE_WEIGHT_ARRAY[0]},${STAGE_WEIGHT_ARRAY[1]},${STAGE_WEIGHT_ARRAY[2]}]"
+fi
 
 DATA="${DATA:-${REPO_ROOT}/data}"
 DATASET_CONFIG="${DATASET_CONFIG:-${REPO_ROOT}/configs/datasets/office_home_mtda.yaml}"
@@ -78,6 +88,7 @@ OPTS=(
 )
 CFG_OPTS=(
   TRAINER.MAPLE_MTDA.CURRICULUM.DOMAIN_ORDER "${ORDER_CFG}"
+  TRAINER.MAPLE_MTDA.CURRICULUM.STAGE_STEP_WEIGHTS "${STAGE_WEIGHTS_CFG}"
   TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.ENABLED "${REPLAY_ENABLED}"
   TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.TOPK_PER_CLASS "${TOPK_PER_CLASS}"
   TRAINER.MAPLE_MTDA.CURRICULUM.REPLAY.LAMBDA "${REPLAY_LAMBDA}"
@@ -107,6 +118,7 @@ echo "Curriculum ContinuousSharedProjMaPLeMTDA"
 echo "  source: ${SOURCE_CODE} (${SOURCE_DOMAIN})"
 echo "  targets: ${TARGET_DOMAINS[*]}"
 echo "  order: ${ORDER_ARRAY[*]}"
+echo "  stage step weights: ${STAGE_WEIGHTS_CFG}"
 echo "  replay: ${REPLAY_ENABLED}, top-k/class: ${TOPK_PER_CLASS}, lambda: ${REPLAY_LAMBDA}"
 echo "  replay diagnostics: selection=${REPLAY_SELECTION_MODE}, labels=${REPLAY_LABEL_SOURCE}, traversal=${REPLAY_TRAVERSAL}, normalization=${REPLAY_NORMALIZATION}"
 if [ -n "${REPLAY_MANIFEST_PATH}" ]; then
