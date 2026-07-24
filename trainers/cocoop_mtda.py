@@ -29,6 +29,16 @@ class CustomCLIPMTDA(nn.Module):
         baseline_cfg = cfg.TRAINER.PROMPT_BASELINE_MTDA
         self.lambda_ent = float(baseline_cfg.LAMBDA_ENT)
         self.entropy_eps = float(baseline_cfg.ENTROPY_EPS)
+        self.instance_chunk_size = int(
+            cfg.TRAINER.COCOOP_MTDA.INSTANCE_CHUNK_SIZE
+        )
+        if self.instance_chunk_size < 1:
+            raise ValueError("INSTANCE_CHUNK_SIZE must be at least 1")
+        self.gradient_microbatch_size = int(
+            cfg.TRAINER.COCOOP_MTDA.GRADIENT_MICROBATCH_SIZE
+        )
+        if self.gradient_microbatch_size < 0:
+            raise ValueError("GRADIENT_MICROBATCH_SIZE cannot be negative")
         self.debug_print_once = cfg.TRAINER.COCOOP_MTDA.DEBUG.PRINT_ONCE
         self._has_printed_debug = False
 
@@ -38,13 +48,30 @@ class CustomCLIPMTDA(nn.Module):
         logit_scale = self.logit_scale.exp()
 
         logits = []
-        for prompts_i, image_feature_i in zip(prompts, image_features_norm):
-            text_features = self.text_encoder(prompts_i, self.tokenized_prompts)
+        num_classes = prompts.shape[1]
+        for start in range(0, prompts.shape[0], self.instance_chunk_size):
+            end = min(start + self.instance_chunk_size, prompts.shape[0])
+            chunk_size = end - start
+            prompt_chunk = prompts[start:end].reshape(
+                chunk_size * num_classes, prompts.shape[2], prompts.shape[3]
+            )
+            token_chunk = self.tokenized_prompts.unsqueeze(0).expand(
+                chunk_size, -1, -1
+            ).reshape(chunk_size * num_classes, -1)
+            text_features = self.text_encoder(prompt_chunk, token_chunk).reshape(
+                chunk_size, num_classes, -1
+            )
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-            logits_i = logit_scale * image_feature_i @ text_features.t()
-            logits.append(logits_i)
+            logits.append(
+                logit_scale
+                * torch.einsum(
+                    "bd,bcd->bc",
+                    image_features_norm[start:end],
+                    text_features,
+                )
+            )
 
-        return torch.stack(logits)
+        return torch.cat(logits, dim=0)
 
     def _build_debug_snapshot(self, image_s, image_u_dict, image_features, logits, loss):
         if not self.debug_print_once or self._has_printed_debug:
@@ -118,6 +145,9 @@ class CoCoOpMTDA(MultiTargetTrainerXU):
 
         print("Building CoCoOpMTDA")
         self.model = CustomCLIPMTDA(cfg, classnames, clip_model)
+        self.gradient_microbatch_size = int(
+            cfg.TRAINER.COCOOP_MTDA.GRADIENT_MICROBATCH_SIZE
+        )
         self.uses_target_training = (
             float(cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT) > 0.0
         )
@@ -145,6 +175,14 @@ class CoCoOpMTDA(MultiTargetTrainerXU):
             "CoCoOp mixed-target entropy weight: "
             f"{cfg.TRAINER.PROMPT_BASELINE_MTDA.LAMBDA_ENT}"
         )
+        print(
+            "CoCoOp instance prompt encoder chunk size: "
+            f"{cfg.TRAINER.COCOOP_MTDA.INSTANCE_CHUNK_SIZE}"
+        )
+        print(
+            "CoCoOp gradient microbatch size: "
+            f"{cfg.TRAINER.COCOOP_MTDA.GRADIENT_MICROBATCH_SIZE}"
+        )
         print(f"Trainable parameter count: {trainable_params:,}")
         self.optim = build_optimizer(self.model.prompt_learner, cfg.OPTIM)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
@@ -166,27 +204,46 @@ class CoCoOpMTDA(MultiTargetTrainerXU):
         image_x, label_x, image_u = self.parse_batch_train(batch_x, batch_u)
         model = self._model_ref()
         prec = self.cfg.TRAINER.COCOOP_MTDA.PREC
+        logical_batch_size = image_x.shape[0]
+        microbatch_size = self.gradient_microbatch_size or logical_batch_size
+        microbatch_size = min(microbatch_size, logical_batch_size)
+        loss_summary = {}
+
+        self.optim.zero_grad()
+        for start in range(0, logical_batch_size, microbatch_size):
+            end = min(start + microbatch_size, logical_batch_size)
+            weight = (end - start) / logical_batch_size
+            image_u_micro = {
+                name: images[start:end] for name, images in image_u.items()
+            }
+
+            if prec == "amp":
+                with autocast():
+                    outputs = model.forward_train(
+                        image_x[start:end],
+                        label_x[start:end],
+                        image_u_micro,
+                    )
+                    weighted_loss = outputs["loss"] * weight
+                self.scaler.scale(weighted_loss).backward()
+            else:
+                outputs = model.forward_train(
+                    image_x[start:end],
+                    label_x[start:end],
+                    image_u_micro,
+                )
+                weighted_loss = outputs["loss"] * weight
+                weighted_loss.backward()
+
+            for key, value in outputs.items():
+                scalar = value.item() if torch.is_tensor(value) else float(value)
+                loss_summary[key] = loss_summary.get(key, 0.0) + weight * scalar
 
         if prec == "amp":
-            with autocast():
-                outputs = model.forward_train(image_x, label_x, image_u)
-                loss = outputs["loss"]
-            self.optim.zero_grad()
-            self.scaler.scale(loss).backward()
             self.scaler.step(self.optim)
             self.scaler.update()
         else:
-            outputs = model.forward_train(image_x, label_x, image_u)
-            loss = outputs["loss"]
-            self.optim.zero_grad()
-            loss.backward()
             self.optim.step()
-
-        loss_summary = {"loss": float(loss.item())}
-        for key, value in outputs.items():
-            if key == "loss":
-                continue
-            loss_summary[key] = value.item() if torch.is_tensor(value) else float(value)
 
         if (self.batch_idx + 1) == self.num_batches:
             self.update_lr()

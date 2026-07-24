@@ -195,16 +195,29 @@ class CustomCLIP(nn.Module):
         self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
+        self._eval_text_features = None
 
     def forward(self, image):
         image_features = self.image_encoder(image.type(self.dtype))
 
-        prompts = self.prompt_learner()
-        tokenized_prompts = self.tokenized_prompts
-        text_features = self.text_encoder(prompts, tokenized_prompts)
-
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        if self.training or torch.is_grad_enabled():
+            # Prompt parameters change on every optimizer step.
+            self._eval_text_features = None
+            prompts = self.prompt_learner()
+            text_features = self.text_encoder(prompts, self.tokenized_prompts)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        else:
+            # In evaluation the learned prompts are fixed. Reusing their text
+            # features avoids one 345-class text-transformer pass per image
+            # batch without changing any logits.
+            if self._eval_text_features is None:
+                prompts = self.prompt_learner()
+                text_features = self.text_encoder(prompts, self.tokenized_prompts)
+                self._eval_text_features = (
+                    text_features / text_features.norm(dim=-1, keepdim=True)
+                )
+            text_features = self._eval_text_features
 
         logit_scale = self.logit_scale.exp()
         logits = logit_scale * image_features @ text_features.t()

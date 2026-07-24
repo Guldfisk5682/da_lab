@@ -153,16 +153,17 @@ class PromptLearner(nn.Module):
         bias = bias.unsqueeze(1)           # (batch, 1, ctx_dim)
         ctx = ctx.unsqueeze(0)             # (1, n_ctx, ctx_dim)
         ctx_shifted = ctx + bias           # (batch, n_ctx, ctx_dim)
-        
-        # Use instance-conditioned context tokens for all classes
-        prompts = []
-        for ctx_shifted_i in ctx_shifted:
-            ctx_i = ctx_shifted_i.unsqueeze(0).expand(self.n_cls, -1, -1)
-            pts_i = self.construct_prompts(ctx_i, prefix, suffix)  # (n_cls, n_tkn, ctx_dim)
-            prompts.append(pts_i)
-        prompts = torch.stack(prompts)
-        
-        return prompts
+
+        # Use instance-conditioned context tokens for all classes. Constructing
+        # the batch with broadcasting avoids a Python loop without changing the
+        # prompt values or their gradient paths.
+        batch_size = ctx_shifted.shape[0]
+        ctx_shifted = ctx_shifted[:, None].expand(
+            batch_size, self.n_cls, self.n_ctx, -1
+        )
+        prefix = prefix[None].expand(batch_size, -1, -1, -1)
+        suffix = suffix[None].expand(batch_size, -1, -1, -1)
+        return torch.cat([prefix, ctx_shifted, suffix], dim=2)
 
 
 class CustomCLIP(nn.Module):

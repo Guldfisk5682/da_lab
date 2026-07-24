@@ -168,6 +168,12 @@ def extend_cfg(cfg):
 
     cfg.TRAINER.COCOOP_MTDA = CN()
     cfg.TRAINER.COCOOP_MTDA.PREC = "fp16"
+    # Number of image-conditioned class-prompt groups encoded together.
+    # A value of 1 preserves the original per-image execution order.
+    cfg.TRAINER.COCOOP_MTDA.INSTANCE_CHUNK_SIZE = 1
+    # Split a logical loader batch for activation memory, then accumulate all
+    # gradients before one optimizer step. Zero disables microbatching.
+    cfg.TRAINER.COCOOP_MTDA.GRADIENT_MICROBATCH_SIZE = 0
     cfg.TRAINER.COCOOP_MTDA.DEBUG = CN()
     cfg.TRAINER.COCOOP_MTDA.DEBUG.PRINT_ONCE = False
 

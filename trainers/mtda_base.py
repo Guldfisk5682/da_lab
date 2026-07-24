@@ -373,10 +373,15 @@ class MultiTargetTrainerXU(SimpleTrainer):
                 ]
                 print(" ".join(info))
 
-            n_iter = self.epoch * self.num_batches + self.batch_idx
-            for name, meter in losses.meters.items():
-                self.write_scalar("train/" + name, meter.avg, n_iter)
-            self.write_scalar("train/lr", self.get_current_lr(), n_iter)
+            # Result directories can live on network-backed storage. Writing
+            # TensorBoard events every optimizer step adds synchronous I/O
+            # without increasing the resolution of the printed training log.
+            # Keep the same metrics, sampled at PRINT_FREQ and the epoch end.
+            if meet_freq or (self.batch_idx + 1) == self.num_batches:
+                n_iter = self.epoch * self.num_batches + self.batch_idx
+                for name, meter in losses.meters.items():
+                    self.write_scalar("train/" + name, meter.avg, n_iter)
+                self.write_scalar("train/lr", self.get_current_lr(), n_iter)
 
             end = time.time()
 
