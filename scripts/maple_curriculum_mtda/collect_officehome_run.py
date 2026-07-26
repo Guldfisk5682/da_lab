@@ -21,6 +21,12 @@ def parse_args():
     parser.add_argument("--source", required=True, choices=sorted(DOMAINS))
     parser.add_argument("--variant", required=True)
     parser.add_argument("--seed", type=int, default=100)
+    parser.add_argument(
+        "--log-file",
+        action="append",
+        default=[],
+        help="Additional console log(s) to scan; may be supplied more than once.",
+    )
     return parser.parse_args()
 
 
@@ -34,7 +40,14 @@ def last_float(pattern, text, description):
 def main():
     args = parse_args()
     run_dir = Path(args.run_dir)
-    text = (run_dir / "log.txt").read_text(encoding="utf-8", errors="replace")
+    log_paths = [run_dir / "log.txt", run_dir / "console.log"]
+    log_paths.extend(Path(path) for path in args.log_file)
+    existing_logs = [path for path in log_paths if path.is_file()]
+    if not existing_logs:
+        raise FileNotFoundError(f"No readable logs found for {run_dir}")
+    text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace") for path in existing_logs
+    )
     _, targets = DOMAINS[args.source]
     target_accuracy = {
         domain: last_float(
@@ -60,7 +73,7 @@ def main():
         "variant": args.variant,
         "target_accuracy": target_accuracy,
         "macro_average": macro,
-        "log": str(run_dir / "log.txt"),
+        "logs": [str(path) for path in existing_logs],
     }
     path = run_dir / "mtda_metrics.json"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

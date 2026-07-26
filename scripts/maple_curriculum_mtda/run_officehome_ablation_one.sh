@@ -110,7 +110,7 @@ python train.py \
   --source-domains "${source_domain}" \
   --target-domains "${targets[@]}" \
   --output-dir "${run_dir}" \
-  "${cfg_opts[@]}"
+  "${cfg_opts[@]}" 2>&1 | tee "${run_dir}/console.log"
 
 python scripts/maple_curriculum_mtda/collect_officehome_run.py \
   --run-dir "${run_dir}" --source "${SOURCE}" --variant "${VARIANT}" --seed "${SEED}"
