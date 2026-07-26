@@ -30,19 +30,30 @@ mkdir -p "${DOWNLOAD_DIR}" "${TARGET_DIR}/image_list"
 download_file() {
   local url="$1"
   local destination="$2"
+  local partial="${destination}.part"
+
   if [[ -s "${destination}" ]]; then
-    echo "Using existing ${destination}"
-    return
+    # A non-empty interrupted zip used to be mistaken for a completed file,
+    # causing a later unzip failure. Listing the central directory is a fast
+    # completeness check without decompressing the archive.
+    if [[ "${destination}" == *.zip ]] && ! unzip -Z -1 "${destination}" >/dev/null 2>&1; then
+      echo "Resuming incomplete archive ${destination}"
+      mv "${destination}" "${partial}"
+    else
+      echo "Using existing ${destination}"
+      return
+    fi
   fi
   if command -v curl >/dev/null 2>&1; then
     curl --fail --location --retry 8 --retry-all-errors --continue-at - \
-      --output "${destination}" "${url}"
+      --output "${partial}" "${url}"
   elif command -v wget >/dev/null 2>&1; then
-    wget --continue --tries=8 --output-document="${destination}" "${url}"
+    wget --continue --tries=8 --output-document="${partial}" "${url}"
   else
     echo "Neither curl nor wget is available." >&2
     exit 2
   fi
+  mv "${partial}" "${destination}"
 }
 
 for domain in "${domains[@]}"; do
