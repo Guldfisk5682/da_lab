@@ -9,9 +9,16 @@ DATA_ROOT="${DATA_ROOT:-/path/to/datasets}"
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-${DATA_ROOT%/}/downloads/domainnet}"
 TARGET_DIR="${DATA_ROOT%/}/DomainNet"
 KEEP_ARCHIVES="${KEEP_ARCHIVES:-1}"
+VERIFY_LAYOUT="${VERIFY_LAYOUT:-1}"
 BASE_URL="${DOMAINNET_BASE_URL:-https://csr.bu.edu/ftp/visda/2019/multi-source}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-domains=(clipart infograph painting quickdraw real sketch)
+if [[ -n "${DOMAINNET_DOMAINS:-}" ]]; then
+  # Space-separated subset for resumable parallel staging. The default remains
+  # the complete official six-domain release.
+  read -r -a domains <<< "${DOMAINNET_DOMAINS}"
+else
+  domains=(clipart infograph painting quickdraw real sketch)
+fi
 
 if [[ "${DATA_ROOT}" == "/path/to/datasets" ]]; then
   echo "Set DATA_ROOT to the dataset parent directory." >&2
@@ -39,6 +46,10 @@ download_file() {
 }
 
 for domain in "${domains[@]}"; do
+  case "${domain}" in
+    clipart|infograph|painting|quickdraw|real|sketch) ;;
+    *) echo "Unsupported DomainNet domain: ${domain}" >&2; exit 3 ;;
+  esac
   archive="${DOWNLOAD_DIR}/${domain}.zip"
   if [[ "${domain}" == "clipart" || "${domain}" == "painting" ]]; then
     archive_url="${BASE_URL}/groundtruth/${domain}.zip"
@@ -65,5 +76,7 @@ for domain in "${domains[@]}"; do
   fi
 done
 
-python "${REPO_ROOT}/scripts/datasets/verify_domainnet_layout.py" \
-  --root "${DATA_ROOT}"
+if [[ "${VERIFY_LAYOUT}" == "1" ]]; then
+  python "${REPO_ROOT}/scripts/datasets/verify_domainnet_layout.py" \
+    --root "${DATA_ROOT}"
+fi
