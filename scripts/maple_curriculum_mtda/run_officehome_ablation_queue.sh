@@ -32,7 +32,11 @@ run_one() {
     bash scripts/maple_curriculum_mtda/run_officehome_ablation_one.sh "${variant}" "${source}" "${SEED}"
 
   local run_dir
-  run_dir="$(find "${base}" -type f -name mtda_metrics.json -printf '%h\n' | head -n 1)"
+  # A variant directory may already contain runs for another source domain.
+  # Restrict discovery to the source-specific run so a completed P run cannot
+  # accidentally prevent checkpoint pruning for a later R run.
+  run_dir="$(find "${base}" -type f \
+    -path "*/${source}2*/seed${SEED}/mtda_metrics.json" -printf '%h\n' | head -n 1)"
   if [[ -z "${run_dir}" || ! -s "${run_dir}/mtda_metrics.json" ]]; then
     echo "[$(date -Is)] missing metrics for ${source}/${variant}" >&2
     return 1
