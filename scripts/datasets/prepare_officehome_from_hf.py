@@ -55,9 +55,22 @@ def main():
     split = os.environ.get("HF_DATASET_SPLIT", "train")
     target_dir = Path(os.environ["TARGET_DIR"]).resolve()
     hf_endpoint = os.environ.get("HF_ENDPOINT", "https://hf-mirror.com")
+    local_parquet_dir = os.environ.get("HF_LOCAL_PARQUET_DIR")
 
     os.environ["HF_ENDPOINT"] = hf_endpoint
-    dataset = load_dataset(repo_id, split=split)
+    if local_parquet_dir:
+        parquet_paths = sorted(Path(local_parquet_dir).glob("*.parquet"))
+        if not parquet_paths:
+            raise FileNotFoundError(
+                f"No local parquet shards found under HF_LOCAL_PARQUET_DIR={local_parquet_dir}"
+            )
+        dataset = load_dataset(
+            "parquet",
+            data_files={"train": [str(path) for path in parquet_paths]},
+            split=split,
+        )
+    else:
+        dataset = load_dataset(repo_id, split=split)
 
     label_feature = dataset.features.get("label")
     label_names = getattr(label_feature, "names", None)
