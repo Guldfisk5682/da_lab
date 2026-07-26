@@ -1,11 +1,41 @@
 import argparse
 import datetime
+import inspect
 import json
 import os
 import socket
 import subprocess
 import sys
 import torch
+
+
+def patch_torch_lr_scheduler_compatibility():
+    """Keep the legacy Dassl warmup scheduler runnable on PyTorch >= 2.9.
+
+    Dassl's ``ConstantWarmupScheduler`` still forwards ``verbose`` to
+    ``LRScheduler.__init__``. PyTorch 2.9 removed that argument while keeping
+    the rest of the scheduler API unchanged. Patch only that removed argument
+    and leave pre-2.9 installations untouched.
+    """
+
+    scheduler_cls = torch.optim.lr_scheduler.LRScheduler
+    parameters = inspect.signature(scheduler_cls.__init__).parameters
+    if "verbose" in parameters:
+        return
+
+    original_init = scheduler_cls.__init__
+    if getattr(original_init, "_dassl_legacy_verbose_compat", False):
+        return
+
+    def compatible_init(self, optimizer, last_epoch=-1, verbose=None):
+        return original_init(self, optimizer, last_epoch)
+
+    compatible_init._dassl_legacy_verbose_compat = True
+    scheduler_cls.__init__ = compatible_init
+    print("Applied PyTorch >=2.9 Dassl LRScheduler compatibility patch")
+
+
+patch_torch_lr_scheduler_compatibility()
 
 from dassl.utils import setup_logger, set_random_seed, collect_env_info
 from dassl.config import get_cfg_default
